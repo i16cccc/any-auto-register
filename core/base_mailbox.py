@@ -40,6 +40,14 @@ def create_mailbox(provider: str, extra: dict = None, proxy: str = None) -> 'Bas
             bearer=extra.get("duckmail_bearer", "kevin273945"),
             proxy=proxy,
         )
+    elif provider == "freemail":
+        return FreemailMailbox(
+            api_url=extra.get("freemail_api_url", ""),
+            admin_token=extra.get("freemail_admin_token", ""),
+            username=extra.get("freemail_username", ""),
+            password=extra.get("freemail_password", ""),
+            proxy=proxy,
+        )
     elif provider == "moemail":
         return MoeMailMailbox(
             api_url=extra.get("moemail_api_url", "https://sall.cc"),
@@ -485,6 +493,83 @@ class MoeMailMailbox(BaseMailbox):
                     body = str(msg.get("content") or msg.get("text") or msg.get("body") or "") + " " + str(msg.get("subject") or "")
                     body = re.sub(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '', body)
                     m = re.search(r'(?<!#)(?<!\d)(\d{6})(?!\d)', body)
+                    if m: return m.group(1)
+            except Exception:
+                pass
+            time.sleep(3)
+        return ""
+
+
+class FreemailMailbox(BaseMailbox):
+    """
+    Freemail 自建邮箱服务（基于 Cloudflare Worker）
+    项目: https://github.com/idinging/freemail
+    支持管理员令牌或账号密码两种认证方式
+    """
+
+    def __init__(self, api_url: str, admin_token: str = "",
+                 username: str = "", password: str = "",
+                 proxy: str = None):
+        self.api = api_url.rstrip("/")
+        self.admin_token = admin_token
+        self.username = username
+        self.password = password
+        self.proxy = {"http": proxy, "https": proxy} if proxy else None
+        self._session = None
+        self._email = None
+
+    def _get_session(self):
+        import requests
+        s = requests.Session()
+        s.proxies = self.proxy
+        if self.admin_token:
+            s.headers.update({"Authorization": f"Bearer {self.admin_token}"})
+        elif self.username and self.password:
+            s.post(f"{self.api}/api/login",
+                json={"username": self.username, "password": self.password},
+                timeout=15)
+        self._session = s
+        return s
+
+    def get_email(self) -> MailboxAccount:
+        if not self._session:
+            self._get_session()
+        import requests
+        r = self._session.get(f"{self.api}/api/generate", timeout=15)
+        data = r.json()
+        email = data.get("email", "")
+        self._email = email
+        print(f"[Freemail] 生成邮箱: {email}")
+        return MailboxAccount(email=email, account_id=email)
+
+    def get_current_ids(self, account: MailboxAccount) -> set:
+        try:
+            r = self._session.get(f"{self.api}/api/emails",
+                params={"mailbox": account.email, "limit": 50}, timeout=10)
+            return {str(m["id"]) for m in r.json() if "id" in m}
+        except Exception:
+            return set()
+
+    def wait_for_code(self, account: MailboxAccount, keyword: str = "",
+                      timeout: int = 120, before_ids: set = None) -> str:
+        import re, time
+        seen = set(before_ids or [])
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                r = self._session.get(f"{self.api}/api/emails",
+                    params={"mailbox": account.email, "limit": 20}, timeout=10)
+                for msg in r.json():
+                    mid = str(msg.get("id", ""))
+                    if not mid or mid in seen: continue
+                    seen.add(mid)
+                    # 直接用 verification_code 字段
+                    code = str(msg.get("verification_code") or "")
+                    if code and code != "None":
+                        return code
+                    # 兜底：从 preview 提取
+                    text = str(msg.get("preview", "")) + " " + str(msg.get("subject", ""))
+                    m = re.search(r"(?<!\d)(\d{6})(?!\d)", text)
                     if m: return m.group(1)
             except Exception:
                 pass

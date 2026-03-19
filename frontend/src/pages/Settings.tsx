@@ -10,6 +10,7 @@ const SELECT_FIELDS: Record<string, { label: string; value: string }[]> = {
     { label: 'TempMail.lol（自动生成）', value: 'tempmail_lol' },
     { label: 'DuckMail（自动生成）', value: 'duckmail' },
     { label: 'MoeMail (sall.cc)', value: 'moemail' },
+    { label: 'Freemail（自建 CF Worker）', value: 'freemail' },
     { label: 'CF Worker（自建域名）', value: 'cfworker' },
   ],
   default_executor: [
@@ -51,6 +52,15 @@ const TABS = [
         { key: 'laoudo_email', label: '邮箱地址', placeholder: 'xxx@laoudo.com' },
         { key: 'laoudo_account_id', label: 'Account ID', placeholder: '563' },
         { key: 'laoudo_auth', label: 'JWT Token', placeholder: 'eyJ...', secret: true },
+      ],
+    }, {
+      section: 'Freemail',
+      desc: '基于 Cloudflare Worker 的自建邮箱，支持管理员令牌或账号密码认证',
+      items: [
+        { key: 'freemail_api_url', label: 'API URL', placeholder: 'https://mail.example.com' },
+        { key: 'freemail_admin_token', label: '管理员令牌', secret: true },
+        { key: 'freemail_username', label: '用户名（可选）', placeholder: '' },
+        { key: 'freemail_password', label: '密码（可选）', secret: true },
       ],
     }, {
       section: 'MoeMail',
