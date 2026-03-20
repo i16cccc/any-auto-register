@@ -25,7 +25,8 @@ class GrokPlatform(BasePlatform):
 
         def otp_cb():
             log("等待验证码...")
-            code = self.mailbox.wait_for_code(mail_acct, keyword="", before_ids=before_ids)
+            code = self.mailbox.wait_for_code(mail_acct, keyword="", before_ids=before_ids,
+                                              code_pattern=r'[A-Z0-9]{3}-[A-Z0-9]{3}')
             if code: log(f"验证码: {code}")
             return code
 
