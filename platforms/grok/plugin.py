@@ -1,6 +1,8 @@
 """Grok (x.ai) 平台插件"""
 from core.base_platform import BasePlatform, Account, AccountStatus, RegisterConfig
 from core.base_mailbox import BaseMailbox
+from core.registration import BrowserRegistrationAdapter, OtpSpec, ProtocolMailboxAdapter, ProtocolOAuthAdapter, RegistrationCapability, RegistrationResult
+from core.registration.helpers import resolve_timeout
 from core.registry import register
 
 
@@ -17,104 +19,75 @@ class GrokPlatform(BasePlatform):
         super().__init__(config)
         self.mailbox = mailbox
 
-    def _register_browser(self, identity, password: str) -> Account:
-        log = getattr(self, '_log_fn', print)
-        extra = self.config.extra or {}
-        identity_mode = identity.identity_provider
-        if identity_mode == "oauth_browser" and self.config.executor_type != "headed":
-            raise RuntimeError("Grok 浏览器 OAuth 仅支持 executor_type=headed")
-        if identity_mode == "mailbox" and not identity.has_mailbox:
-            raise ValueError("Grok 浏览器邮箱注册依赖 mailbox provider")
-        otp_cb = self._build_otp_callback(
-            identity,
-            wait_message="等待验证码...",
-            code_pattern=r'[A-Z0-9]{3}-[A-Z0-9]{3}',
-        )
-        from platforms.grok.browser_register import GrokBrowserRegister
-        reg = GrokBrowserRegister(
-            headless=(self.config.executor_type == "headless"),
-            proxy=self.config.proxy,
-            otp_callback=otp_cb,
-            oauth_provider=identity.oauth_provider,
-            manual_oauth_timeout=int(extra.get("browser_oauth_timeout", extra.get("manual_oauth_timeout", 300)) or 300),
-            chrome_user_data_dir=identity.chrome_user_data_dir,
-            chrome_cdp_url=identity.chrome_cdp_url,
-            log_fn=log,
-        )
-        result = reg.register(email=identity.email or "", password=password, identity_provider=identity_mode)
-        return Account(
-            platform="grok",
+    def _prepare_registration_password(self, password: str | None) -> str | None:
+        return password or ""
+
+    def _map_grok_result(self, result: dict, *, password: str = "") -> RegistrationResult:
+        return RegistrationResult(
             email=result["email"],
-            password=result.get("password", ""),
-            status=AccountStatus.REGISTERED,
-            extra={"sso": result.get("sso", ""), "sso_rw": result.get("sso_rw", "")},
-        )
-
-    def register(self, email: str, password: str = None) -> Account:
-        log = getattr(self, '_log_fn', print)
-        extra = self.config.extra or {}
-        identity = self._resolve_identity(email, require_email=False)
-
-        if (self.config.executor_type or "") in ("headless", "headed"):
-            log(f"使用浏览器模式注册: {identity.email or '(oauth)'}")
-            return self._register_browser(identity, password or "")
-
-        if identity.identity_provider == "oauth_browser":
-            from platforms.grok.browser_oauth import register_with_browser_oauth
-            result = register_with_browser_oauth(
-                proxy=self.config.proxy,
-                oauth_provider=identity.oauth_provider,
-                email_hint=identity.email,
-                timeout=int(extra.get("browser_oauth_timeout", extra.get("manual_oauth_timeout", 300)) or 300),
-                log_fn=log,
-                headless=(self.config.executor_type == "headless"),
-                chrome_user_data_dir=identity.chrome_user_data_dir,
-                chrome_cdp_url=identity.chrome_cdp_url,
-            )
-            return Account(
-                platform="grok",
-                email=result["email"],
-                password="",
-                status=AccountStatus.REGISTERED,
-                extra={
-                    "sso": result.get("sso", ""),
-                    "sso_rw": result.get("sso_rw", ""),
-                },
-            )
-
-        if not identity.email:
-            raise ValueError("Grok 注册流程依赖 mailbox provider，当前未获取到邮箱账号")
-        from platforms.grok.core import GrokRegister
-        log(f"邮箱: {identity.email}")
-        otp_cb = self._build_otp_callback(
-            identity,
-            wait_message="等待验证码...",
-            code_pattern=r'[A-Z0-9]{3}-[A-Z0-9]{3}',
-        )
-
-        yescaptcha_key = self.config.extra.get("yescaptcha_key", "")
-        reg = GrokRegister(
-            yescaptcha_key=yescaptcha_key,
-            proxy=self.config.proxy,
-            log_fn=log,
-        )
-        result = reg.register(
-            email=identity.email,
-            password=password,
-            otp_callback=otp_cb,
-        )
-
-        return Account(
-            platform="grok",
-            email=result["email"],
-            password=result["password"],
+            password=password or result.get("password", ""),
             status=AccountStatus.REGISTERED,
             extra={
-                "sso": result["sso"],
-                "sso_rw": result["sso_rw"],
-                "given_name": result["given_name"],
-                "family_name": result["family_name"],
+                "sso": result.get("sso", ""),
+                "sso_rw": result.get("sso_rw", ""),
+                "given_name": result.get("given_name", ""),
+                "family_name": result.get("family_name", ""),
             },
+        )
+
+    def _run_protocol_oauth(self, ctx) -> dict:
+        from platforms.grok.browser_oauth import register_with_browser_oauth
+
+        return register_with_browser_oauth(
+            proxy=ctx.proxy,
+            oauth_provider=ctx.identity.oauth_provider,
+            email_hint=ctx.identity.email,
+            timeout=resolve_timeout(ctx.extra, ("browser_oauth_timeout", "manual_oauth_timeout"), 300),
+            log_fn=ctx.log,
+            headless=(ctx.executor_type == "headless"),
+            chrome_user_data_dir=ctx.identity.chrome_user_data_dir,
+            chrome_cdp_url=ctx.identity.chrome_cdp_url,
+        )
+
+    def build_browser_registration_adapter(self):
+        return BrowserRegistrationAdapter(
+            result_mapper=lambda ctx, result: self._map_grok_result(result),
+            browser_worker_builder=lambda ctx, artifacts: __import__("platforms.grok.browser_register", fromlist=["GrokBrowserRegister"]).GrokBrowserRegister(
+                headless=(ctx.executor_type == "headless"),
+                proxy=ctx.proxy,
+                otp_callback=artifacts.otp_callback,
+                log_fn=ctx.log,
+            ),
+            browser_register_runner=lambda worker, ctx, artifacts: worker.run(
+                email=ctx.identity.email or "",
+                password=ctx.password or "",
+            ),
+            oauth_runner=self._run_protocol_oauth,
+            capability=RegistrationCapability(oauth_allowed_executor_types=("headed",)),
+            otp_spec=OtpSpec(wait_message="等待验证码...", code_pattern=r"[A-Z0-9]{3}-[A-Z0-9]{3}"),
+        )
+
+    def build_protocol_oauth_adapter(self):
+        return ProtocolOAuthAdapter(
+            oauth_runner=self._run_protocol_oauth,
+            result_mapper=lambda ctx, result: self._map_grok_result(result),
+        )
+
+    def build_protocol_mailbox_adapter(self):
+        return ProtocolMailboxAdapter(
+            result_mapper=lambda ctx, result: self._map_grok_result(result),
+            worker_builder=lambda ctx, artifacts: __import__("platforms.grok.protocol_mailbox", fromlist=["GrokProtocolMailboxWorker"]).GrokProtocolMailboxWorker(
+                captcha_solver=artifacts.captcha_solver,
+                proxy=ctx.proxy,
+                log_fn=ctx.log,
+            ),
+            register_runner=lambda worker, ctx, artifacts: worker.run(
+                email=ctx.identity.email,
+                password=ctx.password,
+                otp_callback=artifacts.otp_callback,
+            ),
+            otp_spec=OtpSpec(wait_message="等待验证码...", code_pattern=r"[A-Z0-9]{3}-[A-Z0-9]{3}"),
+            use_captcha=True,
         )
 
     def check_valid(self, account: Account) -> bool:

@@ -44,59 +44,14 @@ class GrokBrowserRegister:
         headless: bool,
         proxy: Optional[str] = None,
         otp_callback: Optional[Callable[[], str]] = None,
-        oauth_provider: str = "",
-        manual_oauth_timeout: int = 300,
-        chrome_user_data_dir: str = "",
-        chrome_cdp_url: str = "",
         log_fn: Callable[[str], None] = print,
     ):
         self.headless = headless
         self.proxy = proxy
         self.otp_callback = otp_callback
-        self.oauth_provider = oauth_provider
-        self.manual_oauth_timeout = manual_oauth_timeout
-        self.chrome_user_data_dir = chrome_user_data_dir
-        self.chrome_cdp_url = chrome_cdp_url
         self.log = log_fn
 
-    def _register_oauth(self, email: str, password: str) -> dict:
-        from core.oauth_browser import OAuthBrowser, browser_login_method_text, finalize_oauth_email
-        from core.oauth_browser import try_click_provider_on_page
-        with OAuthBrowser(
-            proxy=self.proxy, headless=False,
-            chrome_user_data_dir=self.chrome_user_data_dir,
-            chrome_cdp_url=self.chrome_cdp_url, log_fn=self.log,
-        ) as ob:
-            ob.goto(f"{ACCOUNTS_URL}/sign-in")
-            time.sleep(2)
-            if self.oauth_provider:
-                try_click_provider_on_page(ob.active_page(), self.oauth_provider)
-            if self.chrome_user_data_dir or self.chrome_cdp_url:
-                ob.auto_select_google_account()
-            else:
-                self.log(f"请在浏览器中完成登录，可使用 {browser_login_method_text(self.oauth_provider)}，最长等待 {self.manual_oauth_timeout} 秒")
-            # Wait for sso cookie on grok.com
-            deadline = time.time() + self.manual_oauth_timeout
-            sso = ""
-            while time.time() < deadline:
-                cookies = ob.active_page().context.cookies()
-                for c in cookies:
-                    if c["name"] == "sso" and "x.ai" in c.get("domain", ""):
-                        sso = c["value"]
-                        break
-                if sso:
-                    break
-                time.sleep(1)
-            if not sso:
-                raise RuntimeError(f"Grok 浏览器登录未在 {self.manual_oauth_timeout} 秒内拿到 sso cookie")
-            cookies_all = {c["name"]: c["value"] for c in ob.active_page().context.cookies()}
-            resolved = finalize_oauth_email(email, email, "Grok")
-            return {"email": resolved, "password": password, "sso": sso, "sso_rw": cookies_all.get("sso-rw", "")}
-
-    def register(self, email: str, password: str, identity_provider: str = "mailbox") -> dict:
-        if identity_provider in ("oauth_browser", "oauth_manual"):
-            return self._register_oauth(email, password)
-
+    def run(self, email: str, password: str) -> dict:
         proxy = _build_proxy_config(self.proxy)
         launch_opts = {"headless": self.headless}
         if proxy:

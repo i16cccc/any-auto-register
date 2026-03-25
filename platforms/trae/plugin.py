@@ -1,6 +1,8 @@
 """Trae.ai 平台插件"""
 from core.base_platform import BasePlatform, Account, AccountStatus, RegisterConfig
 from core.base_mailbox import BaseMailbox
+from core.registration import BrowserRegistrationAdapter, OtpSpec, ProtocolMailboxAdapter, ProtocolOAuthAdapter, RegistrationCapability, RegistrationResult
+from core.registration.helpers import resolve_timeout
 from core.registry import register
 
 
@@ -17,98 +19,76 @@ class TraePlatform(BasePlatform):
         super().__init__(config)
         self.mailbox = mailbox
 
-    def _register_browser(self, identity, password: str) -> Account:
-        log = getattr(self, '_log_fn', print)
-        extra = self.config.extra or {}
-        identity_mode = identity.identity_provider
-        if identity_mode == "oauth_browser" and self.config.executor_type != "headed":
-            raise RuntimeError("Trae 浏览器 OAuth 仅支持 executor_type=headed")
-        if identity_mode == "mailbox" and not identity.has_mailbox:
-            raise ValueError("Trae 浏览器邮箱注册依赖 mailbox provider")
-        otp_cb = self._build_otp_callback(identity, wait_message="等待验证码...")
-        from platforms.trae.browser_register import TraeBrowserRegister
-        reg = TraeBrowserRegister(
-            headless=(self.config.executor_type == "headless"),
-            proxy=self.config.proxy,
-            otp_callback=otp_cb,
-            oauth_provider=identity.oauth_provider,
-            manual_oauth_timeout=int(extra.get("browser_oauth_timeout", extra.get("manual_oauth_timeout", 300)) or 300),
-            chrome_user_data_dir=identity.chrome_user_data_dir,
-            chrome_cdp_url=identity.chrome_cdp_url,
-            log_fn=log,
-        )
-        result = reg.register(email=identity.email or "", password=password, identity_provider=identity_mode)
-        return Account(
-            platform="trae",
+    def _prepare_registration_password(self, password: str | None) -> str | None:
+        return password or ""
+
+    def _map_trae_result(self, result: dict, *, password: str = "") -> RegistrationResult:
+        return RegistrationResult(
             email=result["email"],
-            password=result.get("password", ""),
+            password=password or result.get("password", ""),
             user_id=result.get("user_id", ""),
             token=result.get("token", ""),
             region=result.get("region", ""),
             status=AccountStatus.REGISTERED,
-            extra={"cashier_url": result.get("cashier_url", ""), "ai_pay_host": result.get("ai_pay_host", "")},
+            extra={
+                "cashier_url": result.get("cashier_url", ""),
+                "ai_pay_host": result.get("ai_pay_host", ""),
+                "final_url": result.get("final_url", ""),
+            },
         )
 
-    def register(self, email: str, password: str = None) -> Account:
-        log = getattr(self, '_log_fn', print)
-        extra = self.config.extra or {}
-        identity = self._resolve_identity(email, require_email=False)
+    def _run_protocol_oauth(self, ctx) -> dict:
+        from platforms.trae.browser_oauth import register_with_browser_oauth
 
-        if (self.config.executor_type or "") in ("headless", "headed"):
-            log(f"使用浏览器模式注册: {identity.email or '(oauth)'}")
-            return self._register_browser(identity, password or "")
+        return register_with_browser_oauth(
+            proxy=ctx.proxy,
+            oauth_provider=ctx.identity.oauth_provider,
+            email_hint=ctx.identity.email,
+            timeout=resolve_timeout(ctx.extra, ("browser_oauth_timeout", "manual_oauth_timeout"), 300),
+            log_fn=ctx.log,
+            headless=(ctx.executor_type == "headless"),
+            chrome_user_data_dir=ctx.identity.chrome_user_data_dir,
+            chrome_cdp_url=ctx.identity.chrome_cdp_url,
+        )
 
-        if identity.identity_provider == "oauth_browser":
-            from platforms.trae.browser_oauth import register_with_browser_oauth
-            result = register_with_browser_oauth(
-                proxy=self.config.proxy,
-                oauth_provider=identity.oauth_provider,
-                email_hint=identity.email,
-                timeout=int(extra.get("browser_oauth_timeout", extra.get("manual_oauth_timeout", 300)) or 300),
-                log_fn=log,
-                headless=(self.config.executor_type == "headless"),
-                chrome_user_data_dir=identity.chrome_user_data_dir,
-                chrome_cdp_url=identity.chrome_cdp_url,
-            )
-            return Account(
-                platform="trae",
-                email=result["email"],
-                password="",
-                user_id=result.get("user_id", ""),
-                token=result["token"],
-                region=result.get("region", ""),
-                status=AccountStatus.REGISTERED,
-                extra={
-                    "cashier_url": result.get("cashier_url", ""),
-                    "ai_pay_host": result.get("ai_pay_host", ""),
-                    "final_url": result.get("final_url", ""),
-                },
-            )
+    def build_browser_registration_adapter(self):
+        return BrowserRegistrationAdapter(
+            result_mapper=lambda ctx, result: self._map_trae_result(result),
+            browser_worker_builder=lambda ctx, artifacts: __import__("platforms.trae.browser_register", fromlist=["TraeBrowserRegister"]).TraeBrowserRegister(
+                headless=(ctx.executor_type == "headless"),
+                proxy=ctx.proxy,
+                otp_callback=artifacts.otp_callback,
+                log_fn=ctx.log,
+            ),
+            browser_register_runner=lambda worker, ctx, artifacts: worker.run(
+                email=ctx.identity.email or "",
+                password=ctx.password or "",
+            ),
+            oauth_runner=self._run_protocol_oauth,
+            capability=RegistrationCapability(oauth_allowed_executor_types=("headed",)),
+            otp_spec=OtpSpec(wait_message="等待验证码..."),
+        )
 
-        if not identity.email:
-            raise ValueError("Trae 注册流程依赖 mailbox provider，当前未获取到邮箱账号")
-        from platforms.trae.core import TraeRegister
-        log(f"邮箱: {identity.email}")
-        otp_cb = self._build_otp_callback(identity, wait_message="等待验证码...")
+    def build_protocol_oauth_adapter(self):
+        return ProtocolOAuthAdapter(
+            oauth_runner=self._run_protocol_oauth,
+            result_mapper=lambda ctx, result: self._map_trae_result(result),
+        )
 
-        with self._make_executor() as ex:
-            reg = TraeRegister(executor=ex, log_fn=log)
-            result = reg.register(
-                email=identity.email,
-                password=password,
-                otp_callback=otp_cb,
-            )
-
-        return Account(
-            platform="trae",
-            email=result["email"],
-            password=result["password"],
-            user_id=result["user_id"],
-            token=result["token"],
-            region=result["region"],
-            status=AccountStatus.REGISTERED,
-            extra={"cashier_url": result["cashier_url"],
-                   "ai_pay_host": result["ai_pay_host"]},
+    def build_protocol_mailbox_adapter(self):
+        return ProtocolMailboxAdapter(
+            result_mapper=lambda ctx, result: self._map_trae_result(result),
+            worker_builder=lambda ctx, artifacts: __import__("platforms.trae.protocol_mailbox", fromlist=["TraeProtocolMailboxWorker"]).TraeProtocolMailboxWorker(
+                executor=artifacts.executor,
+                log_fn=ctx.log,
+            ),
+            register_runner=lambda worker, ctx, artifacts: worker.run(
+                email=ctx.identity.email,
+                password=ctx.password,
+                otp_callback=artifacts.otp_callback,
+            ),
+            otp_spec=OtpSpec(wait_message="等待验证码..."),
+            use_executor=True,
         )
 
     def check_valid(self, account: Account) -> bool:

@@ -432,10 +432,6 @@ class CursorBrowserRegister:
         proxy: Optional[str] = None,
         otp_callback: Optional[Callable[[], str]] = None,
         phone_callback: Optional[Callable[[], str]] = None,
-        oauth_provider: str = "",
-        manual_oauth_timeout: int = 300,
-        chrome_user_data_dir: str = "",
-        chrome_cdp_url: str = "",
         log_fn: Callable[[str], None] = print,
     ):
         self.captcha = captcha
@@ -443,10 +439,6 @@ class CursorBrowserRegister:
         self.proxy = proxy
         self.otp_callback = otp_callback
         self.phone_callback = phone_callback
-        self.oauth_provider = oauth_provider
-        self.manual_oauth_timeout = manual_oauth_timeout
-        self.chrome_user_data_dir = chrome_user_data_dir
-        self.chrome_cdp_url = chrome_cdp_url
         self.log = log_fn
 
     def _solve_turnstile(self, url: str, sitekey: str) -> Optional[str]:
@@ -464,38 +456,7 @@ class CursorBrowserRegister:
             self.log(f"⚠️ Captcha Solver 失败: {e}")
             return None
 
-    def _register_oauth(self, email: str) -> dict:
-        from core.oauth_browser import OAuthBrowser, browser_login_method_text, finalize_oauth_email
-        from core.oauth_browser import try_click_provider_on_page
-        from platforms.cursor.switch import get_cursor_user_info
-        with OAuthBrowser(
-            proxy=self.proxy, headless=False,
-            chrome_user_data_dir=self.chrome_user_data_dir,
-            chrome_cdp_url=self.chrome_cdp_url, log_fn=self.log,
-        ) as ob:
-            ob.goto(f"{AUTH}/sign-up")
-            time.sleep(2)
-            if self.oauth_provider:
-                try_click_provider_on_page(ob.active_page(), self.oauth_provider)
-            if self.chrome_user_data_dir or self.chrome_cdp_url:
-                ob.auto_select_google_account()
-            else:
-                self.log(f"请在浏览器中完成登录，可使用 {browser_login_method_text(self.oauth_provider)}，最长等待 {self.manual_oauth_timeout} 秒")
-            token = ob.wait_for_cookie_value(
-                ["WorkosCursorSessionToken"], timeout=self.manual_oauth_timeout,
-                domain_substrings=("cursor.com", "cursor.sh"),
-            )
-            if not token:
-                raise RuntimeError(f"Cursor 浏览器登录未在 {self.manual_oauth_timeout} 秒内拿到 Session Token")
-            token = unquote(token)
-            user_info = get_cursor_user_info(token) or {}
-            resolved_email = finalize_oauth_email(user_info.get("email", ""), email, "Cursor")
-            return {"email": resolved_email, "password": "", "token": token}
-
-    def register(self, email: str, password: str = "", identity_provider: str = "mailbox") -> dict:
-        if identity_provider in ("oauth_browser", "oauth_manual"):
-            return self._register_oauth(email)
-
+    def run(self, email: str, password: str = "") -> dict:
         first = ''.join(random.choices(string.ascii_lowercase, k=5)).capitalize()
         last = ''.join(random.choices(string.ascii_lowercase, k=5)).capitalize()
 

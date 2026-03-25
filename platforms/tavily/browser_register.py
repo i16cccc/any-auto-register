@@ -14,9 +14,7 @@ ORG_ONLY_SIGNUP_MARKERS = (
     "please use google, github, linkedin, or microsoft to sign up",
 )
 from core.oauth_browser import (
-    OAUTH_PROVIDER_LABELS,
     try_click_provider_on_page,
-    normalize_oauth_provider as _normalize_oauth_provider,
 )
 
 
@@ -25,9 +23,6 @@ def extract_signup_url(html: str) -> Optional[str]:
     if not match:
         return None
     return f"https://auth.tavily.com{match.group(1)}"
-
-
-normalize_oauth_provider = _normalize_oauth_provider
 
 
 def fill_first_input(page, selectors: list[str], value: str) -> Optional[str]:
@@ -388,10 +383,6 @@ class TavilyBrowserRegister:
         verification_link_callback: Optional[Callable[[], str]] = None,
         email_code_timeout: int = 120,
         api_key_timeout: int = 20,
-        oauth_provider: str = "",
-        manual_oauth_timeout: int = 300,
-        chrome_user_data_dir: str = "",
-        chrome_cdp_url: str = "",
         log_fn: Callable[[str], None] = print,
     ):
         self.captcha = captcha
@@ -401,10 +392,6 @@ class TavilyBrowserRegister:
         self.verification_link_callback = verification_link_callback
         self.email_code_timeout = email_code_timeout
         self.api_key_timeout = api_key_timeout
-        self.oauth_provider = normalize_oauth_provider(oauth_provider)
-        self.manual_oauth_timeout = manual_oauth_timeout
-        self.chrome_user_data_dir = chrome_user_data_dir
-        self.chrome_cdp_url = chrome_cdp_url
         self.log = log_fn
 
     def _solve_turnstile(self, url: str, sitekey: str) -> Optional[str]:
@@ -487,56 +474,7 @@ class TavilyBrowserRegister:
 
         return self._recover_password_challenge(page, password)
 
-    def _register_with_manual_oauth(self, page, email: str, password: str) -> dict:
-        if self.headless:
-            raise RuntimeError("Tavily 浏览器 OAuth 仅支持有头浏览器，请将 executor_type 设为 headed")
-        provider_label = OAUTH_PROVIDER_LABELS.get(self.oauth_provider, self.oauth_provider.title()) if self.oauth_provider else ""
-        if self.oauth_provider:
-            self.log(f"切换到 {provider_label} 登录入口")
-            if not click_oauth_provider(page, self.oauth_provider):
-                page.goto("https://app.tavily.com/sign-in", wait_until="networkidle", timeout=30000)
-                time.sleep(2)
-                if not click_oauth_provider(page, self.oauth_provider):
-                    raise RuntimeError(f"未找到 {provider_label} 登录入口")
-
-        method_text = provider_label or "邮箱、Google、GitHub、LinkedIn、Microsoft 等任一可用方式"
-        self.log(f"请在浏览器中完成登录/授权，可使用 {method_text}，最长等待 {self.manual_oauth_timeout} 秒")
-        if email:
-            self.log(f"请确认最终登录账号邮箱为: {email}")
-        if not wait_for_manual_oauth_completion(page, timeout=self.manual_oauth_timeout):
-            raise RuntimeError(f"Tavily 浏览器登录未在 {self.manual_oauth_timeout} 秒内完成")
-
-        time.sleep(3)
-        api_key = self._finalize_api_key(page)
-        return {"email": email, "password": password, "api_key": api_key}
-
-    def _register_oauth_with_chrome(self, email: str, password: str) -> dict:
-        """使用 OAuthBrowser（Chrome Profile / CDP）完成 OAuth 注册。"""
-        from core.oauth_browser import OAuthBrowser
-        with OAuthBrowser(
-            proxy=self.proxy,
-            headless=False,
-            chrome_user_data_dir=self.chrome_user_data_dir,
-            chrome_cdp_url=self.chrome_cdp_url,
-            log_fn=self.log,
-        ) as ob:
-            ob.goto("https://app.tavily.com/sign-in", wait_until="networkidle", timeout=30000)
-            time.sleep(2)
-            page = ob.active_page()
-            signup_url = extract_signup_url(page.content())
-            if not signup_url:
-                raise RuntimeError("未找到 Tavily 注册入口")
-            self.log("进入 Tavily 注册页")
-            ob.goto(signup_url, wait_until="networkidle", timeout=30000)
-            time.sleep(2)
-            page = ob.active_page()
-            result = self._register_with_manual_oauth(page, email, password)
-            return result
-
-    def register(self, email: str, password: str, identity_provider: str = "mailbox") -> dict:
-        if identity_provider in ("oauth_browser", "oauth_manual"):
-            return self._register_oauth_with_chrome(email, password)
-
+    def run(self, email: str, password: str) -> dict:
         launch_options = {"headless": self.headless}
         proxy = _build_proxy_config(self.proxy)
         if proxy:
@@ -555,9 +493,6 @@ class TavilyBrowserRegister:
             self.log("进入 Tavily 注册页")
             page.goto(signup_url, wait_until="networkidle", timeout=30000)
             time.sleep(2)
-
-            if identity_provider in ("oauth_browser", "oauth_manual"):
-                return self._register_with_manual_oauth(page, email, password)
 
             email_selector = fill_first_input(page, ['input[name="email"]', 'input[name="username"]'], email)
             if not email_selector:

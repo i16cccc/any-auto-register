@@ -2,6 +2,8 @@
 import random, string
 from core.base_platform import BasePlatform, Account, AccountStatus, RegisterConfig
 from core.base_mailbox import BaseMailbox
+from core.registration import BrowserRegistrationAdapter, OtpSpec, ProtocolMailboxAdapter, ProtocolOAuthAdapter, RegistrationCapability, RegistrationResult
+from core.registration.helpers import resolve_timeout
 from core.registry import register
 
 
@@ -31,157 +33,109 @@ class ChatGPTPlatform(BasePlatform):
         except Exception:
             return False
 
-    def _make_email_service(self, identity):
-        provider = (self.config.extra or {}).get("mail_provider", "tempmail_lol")
-        mailbox = getattr(self, "mailbox", None)
-        mail_acct = getattr(identity, "mailbox_account", None)
-        if not mailbox or not mail_acct:
-            raise ValueError("ChatGPT 注册流程依赖 mailbox provider，当前未获取到邮箱账号")
+    def _prepare_registration_password(self, password: str | None) -> str | None:
+        if password:
+            return password
+        return "".join(random.choices(
+            string.ascii_letters + string.digits + "!@#$", k=16))
 
-        class MailboxEmailService:
-            service_type = type("ST", (), {"value": provider})()
-
-            def __init__(self):
-                self._acct = None
-
-            def create_email(self, config=None):
-                self._acct = mail_acct
-                return {
-                    "email": mail_acct.email,
-                    "service_id": getattr(mail_acct, "account_id", ""),
-                    "token": getattr(mail_acct, "account_id", ""),
-                }
-
-            def get_verification_code(self, email=None, email_id=None, timeout=120, pattern=None, otp_sent_at=None):
-                acct = self._acct or mail_acct
-                return mailbox.wait_for_code(acct, keyword="", timeout=timeout, code_pattern=pattern)
-
-            def update_status(self, success, error=None):
-                return None
-
-            @property
-            def status(self):
-                return None
-
-        return MailboxEmailService()
-
-    def _register_browser(self, identity, password: str) -> Account:
-        log = getattr(self, '_log_fn', print)
-        extra = self.config.extra or {}
-        identity_mode = identity.identity_provider
-        if identity_mode == "oauth_browser" and self.config.executor_type != "headed":
-            raise RuntimeError("ChatGPT 浏览器 OAuth 仅支持 executor_type=headed")
-        if identity_mode == "mailbox" and not identity.has_mailbox:
-            raise ValueError("ChatGPT 浏览器邮箱注册依赖 mailbox provider")
-        otp_cb = self._build_otp_callback(identity, wait_message="等待验证码...")
-        from platforms.chatgpt.browser_register import ChatGPTBrowserRegister
-        reg = ChatGPTBrowserRegister(
-            headless=(self.config.executor_type == "headless"),
-            proxy=self.config.proxy,
-            otp_callback=otp_cb,
-            oauth_provider=identity.oauth_provider,
-            manual_oauth_timeout=int(extra.get("browser_oauth_timeout", extra.get("manual_oauth_timeout", 300)) or 300),
-            chrome_user_data_dir=identity.chrome_user_data_dir,
-            chrome_cdp_url=identity.chrome_cdp_url,
-            log_fn=log,
-        )
-        result = reg.register(email=identity.email or "", password=password, identity_provider=identity_mode)
-        return Account(
-            platform='chatgpt',
-            email=result["email"],
-            password=result.get("password", ""),
+    def _map_chatgpt_result(self, result: dict, *, password: str = "", user_id: str = "") -> RegistrationResult:
+        return RegistrationResult(
+            email=result.get("email", ""),
+            password=password or result.get("password", ""),
+            user_id=user_id or result.get("account_id", ""),
             token=result.get("access_token", ""),
             status=AccountStatus.REGISTERED,
             extra={
-                'access_token': result.get("access_token", ""),
-                'refresh_token': result.get("refresh_token", ""),
-                'id_token': result.get("id_token", ""),
-                'session_token': result.get("session_token", ""),
-                'workspace_id': result.get("workspace_id", ""),
-                'cookies': result.get("cookies", ""),
-                'profile': result.get("profile", {}),
+                "access_token": result.get("access_token", ""),
+                "refresh_token": result.get("refresh_token", ""),
+                "id_token": result.get("id_token", ""),
+                "session_token": result.get("session_token", ""),
+                "workspace_id": result.get("workspace_id", ""),
+                "cookies": result.get("cookies", ""),
+                "profile": result.get("profile", {}),
             },
         )
 
-    def register(self, email: str = None, password: str = None) -> Account:
-        if not password:
-            password = "".join(random.choices(
-                string.ascii_letters + string.digits + "!@#$", k=16))
+    def _run_protocol_oauth(self, ctx) -> dict:
+        from platforms.chatgpt.browser_oauth import register_with_browser_oauth
 
-        proxy = self.config.proxy if self.config else None
-        log_fn = getattr(self, '_log_fn', print)
-        extra = self.config.extra or {}
-        identity = self._resolve_identity(email, require_email=False)
+        return register_with_browser_oauth(
+            proxy=ctx.proxy,
+            oauth_provider=ctx.identity.oauth_provider,
+            email_hint=ctx.identity.email,
+            timeout=resolve_timeout(ctx.extra, ("browser_oauth_timeout", "manual_oauth_timeout"), 300),
+            log_fn=ctx.log,
+            headless=(ctx.executor_type == "headless"),
+            chrome_user_data_dir=ctx.identity.chrome_user_data_dir,
+            chrome_cdp_url=ctx.identity.chrome_cdp_url,
+        )
 
-        if (self.config.executor_type or "") in ("headless", "headed"):
-            log_fn(f"使用浏览器模式注册: {identity.email or '(oauth)'}")
-            return self._register_browser(identity, password)
+    def build_browser_registration_adapter(self):
+        return BrowserRegistrationAdapter(
+            result_mapper=lambda ctx, result: self._map_chatgpt_result(result),
+            browser_worker_builder=lambda ctx, artifacts: __import__("platforms.chatgpt.browser_register", fromlist=["ChatGPTBrowserRegister"]).ChatGPTBrowserRegister(
+                headless=(ctx.executor_type == "headless"),
+                proxy=ctx.proxy,
+                otp_callback=artifacts.otp_callback,
+                log_fn=ctx.log,
+            ),
+            browser_register_runner=lambda worker, ctx, artifacts: worker.run(
+                email=ctx.identity.email or "",
+                password=ctx.password or "",
+            ),
+            oauth_runner=self._run_protocol_oauth,
+            capability=RegistrationCapability(oauth_headless_requires_browser_reuse=True),
+            otp_spec=OtpSpec(wait_message="等待验证码..."),
+        )
 
-        if identity.identity_provider == "oauth_browser":
-            from platforms.chatgpt.browser_oauth import register_with_browser_oauth
-            result = register_with_browser_oauth(
-                proxy=proxy,
-                oauth_provider=identity.oauth_provider,
-                email_hint=identity.email,
-                timeout=int(extra.get("browser_oauth_timeout", extra.get("manual_oauth_timeout", 300)) or 300),
-                log_fn=log_fn,
-                headless=(self.config.executor_type == "headless"),
-                chrome_user_data_dir=identity.chrome_user_data_dir,
-                chrome_cdp_url=identity.chrome_cdp_url,
+    def build_protocol_oauth_adapter(self):
+        return ProtocolOAuthAdapter(
+            oauth_runner=self._run_protocol_oauth,
+            result_mapper=lambda ctx, result: self._map_chatgpt_result(result, user_id=result.get("account_id", "")),
+        )
+
+    def build_protocol_mailbox_adapter(self):
+        def _build_worker(ctx, artifacts):
+            from platforms.chatgpt.protocol_mailbox import ChatGPTProtocolMailboxWorker
+
+            return ChatGPTProtocolMailboxWorker(
+                mailbox=self.mailbox,
+                mailbox_account=ctx.identity.mailbox_account,
+                provider=(self.config.extra or {}).get("mail_provider", "tempmail_lol"),
+                proxy_url=ctx.proxy,
+                log_fn=ctx.log,
             )
-            return Account(
-                platform='chatgpt',
-                email=result["email"],
-                password="",
-                user_id=result.get("account_id", ""),
-                token=result.get("access_token", ""),
+
+        def _map_result(ctx, result):
+            return RegistrationResult(
+                email=result.email,
+                password=result.password or (ctx.password or ""),
+                user_id=result.account_id,
+                token=result.access_token,
                 status=AccountStatus.REGISTERED,
                 extra={
-                    'access_token': result.get("access_token", ""),
-                    'refresh_token': result.get("refresh_token", ""),
-                    'id_token': result.get("id_token", ""),
-                    'session_token': result.get("session_token", ""),
-                    'workspace_id': result.get("workspace_id", ""),
-                    'cookies': result.get("cookies", ""),
-                    'profile': result.get("profile", {}),
+                    "access_token": result.access_token,
+                    "refresh_token": result.refresh_token,
+                    "id_token": result.id_token,
+                    "session_token": result.session_token,
+                    "workspace_id": result.workspace_id,
                 },
             )
 
-        if not identity.email:
-            raise ValueError("ChatGPT 注册流程依赖 mailbox provider，当前未获取到邮箱账号")
-        log_fn(f"邮箱: {identity.email}")
-
-        from platforms.chatgpt.register import RegistrationEngine
-        engine = RegistrationEngine(
-            email_service=self._make_email_service(identity),
-            proxy_url=proxy,
-            callback_logger=log_fn,
-        )
-        engine.email = identity.email
-        engine.password = password
-
-        result = engine.run()
-        if not result or not result.success:
-            raise RuntimeError(result.error_message if result else '注册失败')
-
-        return Account(
-            platform='chatgpt',
-            email=result.email,
-            password=result.password or password,
-            user_id=result.account_id,
-            token=result.access_token,
-            status=AccountStatus.REGISTERED,
-            extra={
-                'access_token':  result.access_token,
-                'refresh_token': result.refresh_token,
-                'id_token':      result.id_token,
-                'session_token': result.session_token,
-                'workspace_id':  result.workspace_id,
-            },
+        return ProtocolMailboxAdapter(
+            result_mapper=_map_result,
+            worker_builder=_build_worker,
+            register_runner=lambda worker, ctx, artifacts: worker.run(
+                email=ctx.identity.email,
+                password=ctx.password,
+            ),
         )
 
     def get_platform_actions(self) -> list:
         return [
+            {"id": "switch_account", "label": "切换到 Codex 桌面端", "params": []},
+            {"id": "get_account_state", "label": "查询账号状态/订阅", "params": []},
             {"id": "refresh_token", "label": "刷新 Token", "params": []},
             {"id": "payment_link", "label": "生成支付链接",
              "params": [
@@ -202,6 +156,11 @@ class ChatGPTPlatform(BasePlatform):
              ]},
         ]
 
+    def get_desktop_state(self) -> dict:
+        from platforms.chatgpt.switch import get_codex_desktop_state
+
+        return get_codex_desktop_state()
+
     def execute_action(self, action_id: str, account: Account, params: dict) -> dict:
         proxy = self.config.proxy if self.config else None
         extra = account.extra or {}
@@ -216,13 +175,84 @@ class ChatGPTPlatform(BasePlatform):
         a.client_id = extra.get("client_id", "app_EMoamEEZ73f0CkXaXp7hrann")
         a.cookies = extra.get("cookies", "")
 
+        if action_id == "switch_account":
+            from platforms.chatgpt.switch import (
+                close_codex_app,
+                extract_session_token,
+                fetch_chatgpt_account_state,
+                get_codex_desktop_state,
+                read_current_codex_account,
+                restart_codex_app,
+                switch_codex_account,
+            )
+
+            session_token = extract_session_token(a.session_token, a.cookies)
+            if not session_token:
+                return {"ok": False, "error": "账号缺少 session_token 或可用 cookie，无法切换到本地 Codex 桌面端"}
+
+            close_ok, close_msg = close_codex_app()
+            switch_ok, switch_data = switch_codex_account(session_token=session_token, cookies=a.cookies)
+            if not switch_ok:
+                return {"ok": False, "error": switch_data.get("error", "切换失败")}
+
+            remote_state = fetch_chatgpt_account_state(
+                access_token=a.access_token,
+                session_token=session_token,
+                cookies=a.cookies,
+                proxy=proxy,
+            )
+            local_state = read_current_codex_account()
+            restart_ok, restart_msg = restart_codex_app()
+            message_parts = [switch_data.get("message", "已写入本地 Codex 凭证")]
+            if close_msg:
+                message_parts.append(close_msg)
+            if restart_msg:
+                message_parts.append(restart_msg)
+            data = {
+                "message": "。".join(part for part in message_parts if part),
+                "close": {"ok": close_ok, "message": close_msg},
+                "restart": {"ok": restart_ok, "message": restart_msg},
+                "local_app_account": local_state,
+                "desktop_app_state": get_codex_desktop_state(),
+                "remote_state": remote_state,
+                "switch_details": switch_data,
+            }
+            if remote_state.get("access_token"):
+                data["access_token"] = remote_state["access_token"]
+            if remote_state.get("refresh_token"):
+                data["refresh_token"] = remote_state["refresh_token"]
+            return {"ok": True, "data": data}
+
+        if action_id == "get_account_state":
+            from platforms.chatgpt.switch import fetch_chatgpt_account_state, get_codex_desktop_state, read_current_codex_account
+
+            data = fetch_chatgpt_account_state(
+                access_token=a.access_token,
+                session_token=a.session_token,
+                cookies=a.cookies,
+                proxy=proxy,
+            )
+            data["local_app_account"] = read_current_codex_account()
+            data["desktop_app_state"] = get_codex_desktop_state()
+            return {"ok": True, "data": data}
+
         if action_id == "refresh_token":
             from platforms.chatgpt.token_refresh import TokenRefreshManager
             manager = TokenRefreshManager(proxy_url=proxy)
             result = manager.refresh_account(a)
             if result.success:
-                return {"ok": True, "data": {"access_token": result.access_token,
-                        "refresh_token": result.refresh_token}}
+                data = {"access_token": result.access_token, "refresh_token": result.refresh_token}
+                try:
+                    from platforms.chatgpt.switch import fetch_chatgpt_account_state
+                    data["account_state"] = fetch_chatgpt_account_state(
+                        access_token=result.access_token,
+                        session_token=a.session_token,
+                        cookies=a.cookies,
+                        proxy=proxy,
+                    )
+                except Exception:
+                    pass
+                return {"ok": True, "data": data}
             return {"ok": False, "error": result.error_message}
 
         elif action_id == "payment_link":

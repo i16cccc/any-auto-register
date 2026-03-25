@@ -1,7 +1,27 @@
 """Kiro 平台插件 - 基于 AWS Builder ID 注册"""
 from core.base_platform import BasePlatform, Account, AccountStatus, RegisterConfig
 from core.base_mailbox import BaseMailbox
+from core.registration import BrowserRegistrationAdapter, OtpSpec, ProtocolMailboxAdapter, ProtocolOAuthAdapter, RegistrationCapability, RegistrationResult
+from core.registration.helpers import resolve_timeout
 from core.registry import register
+
+
+def _mask_secret(value: str) -> str:
+    if not value:
+        return ""
+    if len(value) <= 12:
+        return value
+    return f"{value[:6]}...{value[-4:]}"
+
+
+def _kiro_local_matches_target(current: dict, access_token: str, refresh_token: str) -> bool:
+    current_refresh = current.get("refreshToken", "")
+    if current_refresh and refresh_token:
+        return current_refresh == refresh_token
+    current_access = current.get("accessToken", "")
+    if current_access and access_token:
+        return current_access == access_token
+    return False
 
 
 @register
@@ -17,122 +37,89 @@ class KiroPlatform(BasePlatform):
         super().__init__(config)
         self.mailbox = mailbox
 
-    def _register_browser(self, identity, password: str) -> Account:
-        log = getattr(self, '_log_fn', print)
-        extra = self.config.extra or {}
-        identity_mode = identity.identity_provider
-        if identity_mode == "oauth_browser" and self.config.executor_type != "headed":
-            raise RuntimeError("Kiro 浏览器 OAuth 仅支持 executor_type=headed")
-        if identity_mode == "mailbox" and not identity.has_mailbox:
-            raise ValueError("Kiro 浏览器邮箱注册依赖 mailbox provider")
-        otp_cb = self._build_otp_callback(identity, wait_message="等待验证码...")
-        from platforms.kiro.browser_register import KiroBrowserRegister
-        reg = KiroBrowserRegister(
-            headless=(self.config.executor_type == "headless"),
-            proxy=self.config.proxy,
-            otp_callback=otp_cb,
-            oauth_provider=identity.oauth_provider,
-            manual_oauth_timeout=int(extra.get("browser_oauth_timeout", extra.get("manual_oauth_timeout", 300)) or 300),
-            chrome_user_data_dir=identity.chrome_user_data_dir,
-            chrome_cdp_url=identity.chrome_cdp_url,
-            log_fn=log,
-        )
-        result = reg.register(email=identity.email or "", password=password, identity_provider=identity_mode)
-        return Account(
-            platform="kiro",
+    def _prepare_registration_password(self, password: str | None) -> str | None:
+        return password or ""
+
+    def _map_kiro_result(self, result: dict, *, password: str = "", oauth_provider: str = "") -> RegistrationResult:
+        return RegistrationResult(
             email=result["email"],
-            password=result.get("password", ""),
+            password=password or result.get("password", ""),
             token=result.get("accessToken", ""),
             status=AccountStatus.REGISTERED,
             extra={
+                "name": result.get("name", ""),
                 "accessToken": result.get("accessToken", ""),
-                "refreshToken": result.get("refreshToken", ""),
                 "sessionToken": result.get("sessionToken", ""),
+                "csrfToken": result.get("csrfToken", ""),
+                "oauthProvider": oauth_provider or result.get("oauthProvider", ""),
                 "clientId": result.get("clientId", ""),
                 "clientSecret": result.get("clientSecret", ""),
+                "refreshToken": result.get("refreshToken", ""),
             },
         )
 
-    def register(self, email: str, password: str = None) -> Account:
-        proxy = self.config.proxy
-        laoudo_account_id = self.config.extra.get("laoudo_account_id", "")
-        extra = self.config.extra or {}
+    def _run_protocol_oauth(self, ctx) -> dict:
+        from platforms.kiro.browser_oauth import register_with_browser_oauth
 
-        log_fn = getattr(self, '_log_fn', print)
-        otp_timeout = int(self.config.extra.get("otp_timeout", 120))
-        identity = self._resolve_identity(email, require_email=False)
-
-        if (self.config.executor_type or "") in ("headless", "headed"):
-            log_fn(f"使用浏览器模式注册: {identity.email or '(oauth)'}")
-            return self._register_browser(identity, password or "")
-
-        if identity.identity_provider == "oauth_browser":
-            from platforms.kiro.browser_oauth import register_with_browser_oauth
-            info = register_with_browser_oauth(
-                proxy=proxy,
-                oauth_provider=identity.oauth_provider,
-                email_hint=identity.email,
-                timeout=int(extra.get("browser_oauth_timeout", extra.get("manual_oauth_timeout", 300)) or 300),
-                log_fn=log_fn,
-                headless=(self.config.executor_type == "headless"),
-                chrome_user_data_dir=identity.chrome_user_data_dir,
-                chrome_cdp_url=identity.chrome_cdp_url,
-            )
-            return Account(
-                platform="kiro",
-                email=info["email"],
-                password="",
-                token=info.get("accessToken", ""),
-                status=AccountStatus.REGISTERED,
-                extra={
-                    "name": info.get("name", ""),
-                    "accessToken": info.get("accessToken", ""),
-                    "sessionToken": info.get("sessionToken", ""),
-                    "csrfToken": info.get("csrfToken", ""),
-                    "oauthProvider": identity.oauth_provider,
-                    "clientId": info.get("clientId", ""),
-                    "clientSecret": info.get("clientSecret", ""),
-                    "refreshToken": info.get("refreshToken", ""),
-                },
-            )
-
-        if not identity.email:
-            raise ValueError("Kiro 注册流程依赖 mailbox provider，当前未获取到邮箱账号")
-        from platforms.kiro.core import KiroRegister
-        reg = KiroRegister(proxy=proxy, tag="KIRO")
-        reg.log = lambda msg: log_fn(msg)
-        log_fn(f"邮箱: {identity.email}")
-        otp_cb = self._build_otp_callback(
-            identity,
-            timeout=otp_timeout,
-            wait_message="等待验证码...",
+        return register_with_browser_oauth(
+            proxy=ctx.proxy,
+            oauth_provider=ctx.identity.oauth_provider,
+            email_hint=ctx.identity.email,
+            timeout=resolve_timeout(ctx.extra, ("browser_oauth_timeout", "manual_oauth_timeout"), 300),
+            log_fn=ctx.log,
+            headless=(ctx.executor_type == "headless"),
+            chrome_user_data_dir=ctx.identity.chrome_user_data_dir,
+            chrome_cdp_url=ctx.identity.chrome_cdp_url,
         )
 
-        ok, info = reg.register(
-            email=identity.email,
-            pwd=password,
-            name=self.config.extra.get("name", "Kiro User"),
-            mail_token=laoudo_account_id or None,
-            otp_timeout=otp_timeout,
-            otp_callback=otp_cb,
+    def build_browser_registration_adapter(self):
+        return BrowserRegistrationAdapter(
+            result_mapper=lambda ctx, result: self._map_kiro_result(result, oauth_provider=ctx.identity.oauth_provider),
+            browser_worker_builder=lambda ctx, artifacts: __import__("platforms.kiro.browser_register", fromlist=["KiroBrowserRegister"]).KiroBrowserRegister(
+                headless=(ctx.executor_type == "headless"),
+                proxy=ctx.proxy,
+                otp_callback=artifacts.otp_callback,
+                log_fn=ctx.log,
+            ),
+            browser_register_runner=lambda worker, ctx, artifacts: worker.run(
+                email=ctx.identity.email or "",
+                password=ctx.password or "",
+            ),
+            oauth_runner=self._run_protocol_oauth,
+            capability=RegistrationCapability(oauth_headless_requires_browser_reuse=True),
+            otp_spec=OtpSpec(wait_message="等待验证码..."),
         )
 
-        if not ok:
-            raise RuntimeError(f"Kiro 注册失败: {info.get('error')}")
+    def build_protocol_oauth_adapter(self):
+        return ProtocolOAuthAdapter(
+            oauth_runner=self._run_protocol_oauth,
+            result_mapper=lambda ctx, result: self._map_kiro_result(result, oauth_provider=ctx.identity.oauth_provider),
+        )
 
-        return Account(
-            platform="kiro",
-            email=info["email"],
-            password=info["password"],
-            status=AccountStatus.REGISTERED,
-            extra={
-                "name": info.get("name", ""),
-                "accessToken": info.get("accessToken", ""),
-                "sessionToken": info.get("sessionToken", ""),
-                "clientId": info.get("clientId", ""),
-                "clientSecret": info.get("clientSecret", ""),
-                "refreshToken": info.get("refreshToken", ""),
-            },
+    def build_protocol_mailbox_adapter(self):
+        def _build_worker(ctx, artifacts):
+            from platforms.kiro.protocol_mailbox import KiroProtocolMailboxWorker
+
+            return KiroProtocolMailboxWorker(proxy=ctx.proxy, tag="KIRO", log_fn=ctx.log)
+
+        def _run_worker(worker, ctx, artifacts):
+            return worker.run(
+                email=ctx.identity.email,
+                password=ctx.password,
+                name=ctx.extra.get("name", "Kiro User"),
+                mail_token=ctx.extra.get("laoudo_account_id", "") or None,
+                otp_timeout=resolve_timeout(ctx.extra, ("otp_timeout",), 120),
+                otp_callback=artifacts.otp_callback,
+            )
+
+        return ProtocolMailboxAdapter(
+            result_mapper=lambda ctx, result: self._map_kiro_result(result),
+            worker_builder=_build_worker,
+            register_runner=_run_worker,
+            otp_spec=OtpSpec(
+                wait_message="等待验证码...",
+                timeout=resolve_timeout(self.config.extra or {}, ("otp_timeout",), 120),
+            ),
         )
 
     def check_valid(self, account: Account) -> bool:
@@ -156,27 +143,49 @@ class KiroPlatform(BasePlatform):
         return [
             {"id": "switch_account", "label": "切换到桌面应用", "params": []},
             {"id": "refresh_token", "label": "刷新 Token", "params": []},
+            {"id": "get_account_state", "label": "查询账号状态/额度提示", "params": []},
         ]
+
+    def get_desktop_state(self) -> dict:
+        from platforms.kiro.switch import get_kiro_desktop_state
+
+        return get_kiro_desktop_state()
 
     def execute_action(self, action_id: str, account: Account, params: dict) -> dict:
         extra = account.extra or {}
 
         if action_id == "switch_account":
             from platforms.kiro.switch import (
-                refresh_kiro_token, switch_kiro_account, restart_kiro_ide,
+                get_kiro_portal_state,
+                read_current_kiro_account,
+                refresh_kiro_token,
+                restart_kiro_ide,
+                summarize_kiro_usage,
+                switch_kiro_account,
+                get_kiro_desktop_state,
             )
 
             access_token = extra.get("accessToken", "") or account.token
             refresh_token = extra.get("refreshToken", "")
             client_id = extra.get("clientId", "")
             client_secret = extra.get("clientSecret", "")
+            session_token = extra.get("sessionToken", "")
+            profile_arn = extra.get("profileArn", "")
             oauth_provider = (extra.get("oauthProvider", "") or "").strip().lower()
+            refresh_result = {"ok": False, "message": "当前账号未提供 refreshToken/clientId/clientSecret，跳过远端刷新校验"}
 
             if refresh_token and client_id and client_secret:
                 ok, result = refresh_kiro_token(refresh_token, client_id, client_secret)
                 if ok:
                     access_token = result["accessToken"]
                     refresh_token = result.get("refreshToken", refresh_token)
+                    refresh_result = {
+                        "ok": True,
+                        "expiresIn": result.get("expiresIn", 0),
+                        "refreshTokenUpdated": refresh_token != extra.get("refreshToken", ""),
+                    }
+                else:
+                    refresh_result = {"ok": False, "message": result.get("error", "刷新失败")}
 
             switch_kwargs = {}
             if oauth_provider in ("google", "github"):
@@ -193,9 +202,36 @@ class KiroPlatform(BasePlatform):
             if not ok:
                 return {"ok": False, "error": msg}
 
+            current = read_current_kiro_account() or {}
+            portal_state = get_kiro_portal_state(access_token, session_token, profile_arn=profile_arn) or {}
+            usage_summary = summarize_kiro_usage(portal_state)
             restart_ok, restart_msg = restart_kiro_ide()
             return {"ok": True, "data": {
                 "message": f"{msg}。{restart_msg}" if restart_ok else msg,
+                "access_token": access_token,
+                "accessToken": access_token,
+                "refreshToken": refresh_token,
+                "remote_validation": refresh_result,
+                "portal_user": portal_state.get("user_info", {}),
+                "usage_limits": portal_state.get("usage_limits", {}),
+                "available_subscription_plans": portal_state.get("available_subscription_plans", {}),
+                "usage_summary": usage_summary,
+                "portal_session": {
+                    "has_session_token": bool(session_token),
+                    "user_id": portal_state.get("user_id", ""),
+                    "profile_arn": portal_state.get("profile_arn", profile_arn),
+                    "available": portal_state.get("available", False),
+                    "error": portal_state.get("error", ""),
+                },
+                "local_app_account": {
+                    "provider": current.get("provider", ""),
+                    "authMethod": current.get("authMethod", ""),
+                    "accessTokenPreview": _mask_secret(current.get("accessToken", "")),
+                    "matches_target": _kiro_local_matches_target(current, access_token, refresh_token),
+                },
+                "desktop_app_state": get_kiro_desktop_state(),
+                "restart": {"ok": restart_ok, "message": restart_msg},
+                "quota_note": "Kiro 可通过 Web Portal 查询订阅、试用与 credits 用量，但依赖 sessionToken 浏览器会话；若缺少会话则只能返回 token 刷新校验结果。",
             }}
 
         elif action_id == "refresh_token":
@@ -218,5 +254,59 @@ class KiroPlatform(BasePlatform):
                     },
                 }
             return {"ok": False, "error": result.get("error", "刷新失败")}
+
+        elif action_id == "get_account_state":
+            from platforms.kiro.switch import (
+                get_kiro_portal_state,
+                read_current_kiro_account,
+                refresh_kiro_token,
+                summarize_kiro_usage,
+                get_kiro_desktop_state,
+            )
+
+            refresh_token = extra.get("refreshToken", "")
+            client_id = extra.get("clientId", "")
+            client_secret = extra.get("clientSecret", "")
+            session_token = extra.get("sessionToken", "")
+            profile_arn = extra.get("profileArn", "")
+            current = read_current_kiro_account() or {}
+            refresh_state = {"ok": False, "message": "当前账号未提供 refreshToken/clientId/clientSecret，无法执行远端刷新校验"}
+            access_token = extra.get("accessToken", "") or account.token
+            if refresh_token and client_id and client_secret:
+                ok, result = refresh_kiro_token(refresh_token, client_id, client_secret)
+                if ok:
+                    access_token = result["accessToken"]
+                    refresh_state = {"ok": True, "expiresIn": result.get("expiresIn", 0)}
+                else:
+                    refresh_state = {"ok": False, "message": result.get("error", "刷新失败")}
+            portal_state = get_kiro_portal_state(access_token, session_token, profile_arn=profile_arn) or {}
+            usage_summary = summarize_kiro_usage(portal_state)
+            return {
+                "ok": True,
+                "data": {
+                    "access_token": access_token,
+                    "accessToken": access_token,
+                    "remote_validation": refresh_state,
+                    "portal_user": portal_state.get("user_info", {}),
+                    "usage_limits": portal_state.get("usage_limits", {}),
+                    "available_subscription_plans": portal_state.get("available_subscription_plans", {}),
+                    "usage_summary": usage_summary,
+                    "portal_session": {
+                        "has_session_token": bool(session_token),
+                        "user_id": portal_state.get("user_id", ""),
+                        "profile_arn": portal_state.get("profile_arn", profile_arn),
+                        "available": portal_state.get("available", False),
+                        "error": portal_state.get("error", ""),
+                    },
+                    "local_app_account": {
+                        "provider": current.get("provider", ""),
+                        "authMethod": current.get("authMethod", ""),
+                        "accessTokenPreview": _mask_secret(current.get("accessToken", "")),
+                        "matches_target": _kiro_local_matches_target(current, access_token, refresh_token),
+                    },
+                    "desktop_app_state": get_kiro_desktop_state(),
+                    "quota_note": "Kiro 可通过 Web Portal 查询订阅、试用与 credits 用量，但依赖 sessionToken 浏览器会话；若缺少会话则只能返回 token 刷新校验结果。",
+                },
+            }
 
         raise NotImplementedError(f"未知操作: {action_id}")

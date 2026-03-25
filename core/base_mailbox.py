@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import html
 import re
+from urllib.parse import urlencode, urlparse
 
 
 @dataclass
@@ -68,45 +69,95 @@ def _extract_verification_link(text: str, keyword: str = "") -> str | None:
     return urls[0]
 
 
+def _normalize_api_base_url(value: str | None, *, default: str, label: str) -> str:
+    raw = str(value or "").strip() or default
+    if "://" not in raw:
+        raw = f"https://{raw.lstrip('/')}"
+    parsed = urlparse(raw)
+    if not parsed.scheme or not parsed.netloc:
+        raise ValueError(f"{label} 无效: {value!r}")
+    return raw.rstrip("/")
+
+
+def _create_tempmail(extra: dict, proxy: str | None) -> 'BaseMailbox':
+    return TempMailLolMailbox(proxy=proxy)
+
+
+def _create_duckmail(extra: dict, proxy: str | None) -> 'BaseMailbox':
+    return DuckMailMailbox(
+        api_url=extra.get("duckmail_api_url", "https://www.duckmail.sbs"),
+        provider_url=extra.get("duckmail_provider_url", "https://api.duckmail.sbs"),
+        bearer=extra.get("duckmail_bearer", "kevin273945"),
+        proxy=proxy,
+    )
+
+
+def _create_freemail(extra: dict, proxy: str | None) -> 'BaseMailbox':
+    return FreemailMailbox(
+        api_url=extra.get("freemail_api_url", ""),
+        admin_token=extra.get("freemail_admin_token", ""),
+        username=extra.get("freemail_username", ""),
+        password=extra.get("freemail_password", ""),
+        proxy=proxy,
+    )
+
+
+def _create_moemail(extra: dict, proxy: str | None) -> 'BaseMailbox':
+    return MoeMailMailbox(
+        api_url=extra.get("moemail_api_url"),
+        username=extra.get("moemail_username", ""),
+        password=extra.get("moemail_password", ""),
+        session_token=extra.get("moemail_session_token", ""),
+        proxy=proxy,
+    )
+
+
+def _create_cfworker(extra: dict, proxy: str | None) -> 'BaseMailbox':
+    return CFWorkerMailbox(
+        api_url=extra.get("cfworker_api_url", ""),
+        admin_token=extra.get("cfworker_admin_token", ""),
+        domain=extra.get("cfworker_domain", ""),
+        fingerprint=extra.get("cfworker_fingerprint", ""),
+        proxy=proxy,
+    )
+
+
+def _create_laoudo(extra: dict, proxy: str | None) -> 'BaseMailbox':
+    return LaoudoMailbox(
+        auth_token=extra.get("laoudo_auth", ""),
+        email=extra.get("laoudo_email", ""),
+        account_id=extra.get("laoudo_account_id", ""),
+    )
+
+
+MAILBOX_FACTORY_REGISTRY = {
+    "tempmail_lol_api": _create_tempmail,
+    "duckmail_api": _create_duckmail,
+    "freemail_api": _create_freemail,
+    "moemail_api": _create_moemail,
+    "cfworker_admin_api": _create_cfworker,
+    "laoudo_api": _create_laoudo,
+    # backward-compat fallback
+    "tempmail_lol": _create_tempmail,
+    "duckmail": _create_duckmail,
+    "freemail": _create_freemail,
+    "moemail": _create_moemail,
+    "cfworker": _create_cfworker,
+    "laoudo": _create_laoudo,
+}
+
+
 def create_mailbox(provider: str, extra: dict = None, proxy: str = None) -> 'BaseMailbox':
     """工厂方法：根据 provider 创建对应的 mailbox 实例"""
-    extra = extra or {}
-    if provider == "tempmail_lol":
-        return TempMailLolMailbox(proxy=proxy)
-    elif provider == "duckmail":
-        return DuckMailMailbox(
-            api_url=extra.get("duckmail_api_url", "https://www.duckmail.sbs"),
-            provider_url=extra.get("duckmail_provider_url", "https://api.duckmail.sbs"),
-            bearer=extra.get("duckmail_bearer", "kevin273945"),
-            proxy=proxy,
-        )
-    elif provider == "freemail":
-        return FreemailMailbox(
-            api_url=extra.get("freemail_api_url", ""),
-            admin_token=extra.get("freemail_admin_token", ""),
-            username=extra.get("freemail_username", ""),
-            password=extra.get("freemail_password", ""),
-            proxy=proxy,
-        )
-    elif provider == "moemail":
-        return MoeMailMailbox(
-            api_url=extra.get("moemail_api_url", "https://sall.cc"),
-            proxy=proxy,
-        )
-    elif provider == "cfworker":
-        return CFWorkerMailbox(
-            api_url=extra.get("cfworker_api_url", ""),
-            admin_token=extra.get("cfworker_admin_token", ""),
-            domain=extra.get("cfworker_domain", ""),
-            fingerprint=extra.get("cfworker_fingerprint", ""),
-            proxy=proxy,
-        )
-    else:  # laoudo
-        return LaoudoMailbox(
-            auth_token=extra.get("laoudo_auth", ""),
-            email=extra.get("laoudo_email", ""),
-            account_id=extra.get("laoudo_account_id", ""),
-        )
+    from infrastructure.provider_definitions_repository import ProviderDefinitionsRepository
+    from infrastructure.provider_settings_repository import ProviderSettingsRepository
+
+    provider_key = str(provider or "moemail")
+    definition = ProviderDefinitionsRepository().get_by_key("mailbox", provider_key)
+    resolved_extra = ProviderSettingsRepository().resolve_runtime_settings("mailbox", provider_key, extra or {})
+    lookup_key = definition.driver_type if definition else provider_key
+    factory = MAILBOX_FACTORY_REGISTRY.get(lookup_key, _create_laoudo)
+    return factory(resolved_extra, proxy)
 
 
 class LaoudoMailbox(BaseMailbox):
@@ -119,7 +170,37 @@ class LaoudoMailbox(BaseMailbox):
         self._ua = "Mozilla/5.0"
 
     def get_email(self) -> MailboxAccount:
-        return MailboxAccount(email=self._email, account_id=self._account_id)
+        return MailboxAccount(
+            email=self._email,
+            account_id=self._account_id,
+            extra={
+                "provider_account": {
+                    "provider_type": "mailbox",
+                    "provider_name": "laoudo",
+                    "login_identifier": self._email,
+                    "display_name": self._email,
+                    "credentials": {
+                        "authorization": self.auth,
+                    },
+                    "metadata": {
+                        "account_id": self._account_id,
+                        "email": self._email,
+                    },
+                },
+                "provider_resource": {
+                    "provider_type": "mailbox",
+                    "provider_name": "laoudo",
+                    "resource_type": "mailbox",
+                    "resource_identifier": self._account_id,
+                    "handle": self._email,
+                    "display_name": self._email,
+                    "metadata": {
+                        "account_id": self._account_id,
+                        "email": self._email,
+                    },
+                },
+            },
+        )
 
     def get_current_ids(self, account: MailboxAccount) -> set:
         from curl_cffi import requests as curl_requests
@@ -303,7 +384,24 @@ class TempMailLolMailbox(BaseMailbox):
         data = r.json()
         self._email = data.get("address") or data.get("email", "")
         self._token = data.get("token", "")
-        return MailboxAccount(email=self._email, account_id=self._token)
+        return MailboxAccount(
+            email=self._email,
+            account_id=self._token,
+            extra={
+                "provider_resource": {
+                    "provider_type": "mailbox",
+                    "provider_name": "tempmail_lol",
+                    "resource_type": "mailbox",
+                    "resource_identifier": self._token,
+                    "handle": self._email,
+                    "display_name": self._email,
+                    "metadata": {
+                        "email": self._email,
+                        "token": self._token,
+                    },
+                },
+            },
+        )
 
     def get_current_ids(self, account: MailboxAccount) -> set:
         import requests
@@ -404,7 +502,39 @@ class DuckMailMailbox(BaseMailbox):
             json={"address": self._address, "password": password},
             headers=self._common_headers(), proxies=self.proxy, timeout=15, verify=False)
         self._token = r2.json().get("token", "")
-        return MailboxAccount(email=self._address, account_id=self._token)
+        return MailboxAccount(
+            email=self._address,
+            account_id=self._token,
+            extra={
+                "provider_account": {
+                    "provider_type": "mailbox",
+                    "provider_name": "duckmail",
+                    "login_identifier": self._address,
+                    "display_name": self._address,
+                    "credentials": {
+                        "address": self._address,
+                        "password": password,
+                        "token": self._token,
+                    },
+                    "metadata": {
+                        "provider_url": self.provider_url,
+                        "api_url": self.api,
+                    },
+                },
+                "provider_resource": {
+                    "provider_type": "mailbox",
+                    "provider_name": "duckmail",
+                    "resource_type": "mailbox",
+                    "resource_identifier": self._token,
+                    "handle": self._address,
+                    "display_name": self._address,
+                    "metadata": {
+                        "email": self._address,
+                        "provider_url": self.provider_url,
+                    },
+                },
+            },
+        )
 
     def get_current_ids(self, account: MailboxAccount) -> set:
         import requests
@@ -523,7 +653,26 @@ class CFWorkerMailbox(BaseMailbox):
         token = data.get("token", data.get("jwt", ""))
         self._token = token
         print(f"[CFWorker] 生成邮箱: {email} token={token[:40] if token else 'NONE'}...")
-        return MailboxAccount(email=email, account_id=token)
+        return MailboxAccount(
+            email=email,
+            account_id=token,
+            extra={
+                "provider_resource": {
+                    "provider_type": "mailbox",
+                    "provider_name": "cfworker",
+                    "resource_type": "mailbox",
+                    "resource_identifier": token or email,
+                    "handle": email,
+                    "display_name": email,
+                    "metadata": {
+                        "email": email,
+                        "token": token,
+                        "api_url": self.api,
+                        "domain": self.domain,
+                    },
+                },
+            },
+        )
 
     def _get_mails(self, email: str) -> list:
         import requests
@@ -599,51 +748,152 @@ class CFWorkerMailbox(BaseMailbox):
 class MoeMailMailbox(BaseMailbox):
     """MoeMail (sall.cc) 邮箱服务 - 自动注册账号并生成临时邮箱"""
 
-    def __init__(self, api_url: str = "https://sall.cc", proxy: str = None):
-        self.api = api_url.rstrip("/")
+    def __init__(
+        self,
+        api_url: str = "https://sall.cc",
+        username: str = "",
+        password: str = "",
+        session_token: str = "",
+        proxy: str = None,
+    ):
+        self.api = _normalize_api_base_url(api_url, default="https://sall.cc", label="MoeMail API URL")
         self.proxy = {"http": proxy, "https": proxy} if proxy else None
-        self._session_token = None
+        self._configured_username = str(username or "").strip()
+        self._configured_password = str(password or "")
+        self._configured_session_token = str(session_token or "").strip()
+        self._session_token = self._configured_session_token or None
         self._email = None
+        self._session = None
+        self._username = self._configured_username
+        self._password = self._configured_password
 
-    def _register_and_login(self) -> str:
-        import requests, random, string
+    def _new_session(self):
+        import requests
+
         s = requests.Session()
         s.proxies = self.proxy
         s.verify = False
         ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
         s.headers.update({"user-agent": ua, "origin": self.api, "referer": f"{self.api}/zh-CN/login"})
+        return s
+
+    def _extract_session_token(self, session) -> str:
+        for cookie in session.cookies:
+            if "session-token" in cookie.name:
+                return cookie.value
+        return ""
+
+    def _apply_session_token(self, session, token: str) -> None:
+        domain = urlparse(self.api).hostname or ""
+        cookie_names = [
+            "__Secure-authjs.session-token",
+            "authjs.session-token",
+            "__Secure-next-auth.session-token",
+            "next-auth.session-token",
+        ]
+        for name in cookie_names:
+            session.cookies.set(name, token, domain=domain, path="/")
+            session.cookies.set(name, token, path="/")
+
+    def _login_with_existing_account(self) -> str:
+        s = self._new_session()
+
+        if self._configured_session_token:
+            self._apply_session_token(s, self._configured_session_token)
+            self._session = s
+            self._session_token = self._configured_session_token
+            print("[MoeMail] 使用已提供的 session-token")
+            return self._configured_session_token
+
+        if not (self._configured_username and self._configured_password):
+            raise RuntimeError("MoeMail 未配置可复用账号，请提供用户名密码或 session-token")
+
+        csrf_r = s.get(f"{self.api}/api/auth/csrf", timeout=10)
+        csrf = csrf_r.json().get("csrfToken", "")
+        login_resp = s.post(
+            f"{self.api}/api/auth/callback/credentials",
+            headers={"content-type": "application/x-www-form-urlencoded"},
+            data=urlencode({
+                "username": self._configured_username,
+                "password": self._configured_password,
+                "csrfToken": csrf,
+                "redirect": "false",
+                "callbackUrl": self.api,
+            }),
+            allow_redirects=True,
+            timeout=15,
+        )
+        self._session = s
+        self._username = self._configured_username
+        self._password = self._configured_password
+        token = self._extract_session_token(s)
+        if token:
+            self._session_token = token
+            print("[MoeMail] 使用手动注册账号登录成功")
+            return token
+        raise RuntimeError(
+            f"MoeMail 登录失败: 已提供用户名密码，但未获取到 session-token (HTTP {login_resp.status_code})"
+        )
+
+    def _ensure_session(self) -> str:
+        if self._session_token and self._session is not None:
+            return self._session_token
+        if self._configured_session_token or self._configured_username:
+            return self._login_with_existing_account()
+        return self._register_and_login()
+
+    def _register_and_login(self) -> str:
+        import random, string
+
+        s = self._new_session()
         # 注册
         username = "".join(random.choices(string.ascii_lowercase + string.digits, k=12))
         password = "Test" + "".join(random.choices(string.digits, k=8)) + "!"
+        self._username = username
+        self._password = password
         print(f"[MoeMail] 注册账号: {username} / {password}")
         r_reg = s.post(f"{self.api}/api/auth/register",
             json={"username": username, "password": password, "turnstileToken": ""},
             timeout=15)
         print(f"[MoeMail] 注册结果: {r_reg.status_code} {r_reg.text[:80]}")
+        if r_reg.status_code >= 400:
+            try:
+                register_error = r_reg.json().get("error") or r_reg.text
+            except Exception:
+                register_error = r_reg.text
+            raise RuntimeError(f"MoeMail 注册失败: {str(register_error).strip() or f'HTTP {r_reg.status_code}'}")
         # 获取 CSRF
         csrf_r = s.get(f"{self.api}/api/auth/csrf", timeout=10)
         csrf = csrf_r.json().get("csrfToken", "")
         # 登录
-        s.post(f"{self.api}/api/auth/callback/credentials",
+        login_resp = s.post(f"{self.api}/api/auth/callback/credentials",
             headers={"content-type": "application/x-www-form-urlencoded"},
-            data=f"username={username}&password={password}&csrfToken={csrf}&redirect=false&callbackUrl={self.api}",
+            data=urlencode({
+                "username": username,
+                "password": password,
+                "csrfToken": csrf,
+                "redirect": "false",
+                "callbackUrl": self.api,
+            }),
             allow_redirects=True, timeout=15)
         self._session = s
-        for cookie in s.cookies:
-            if "session-token" in cookie.name:
-                self._session_token = cookie.value
-                print(f"[MoeMail] 登录成功")
-                return cookie.value
+        token = self._extract_session_token(s)
+        if token:
+            self._session_token = token
+            print(f"[MoeMail] 登录成功")
+            return token
         print(f"[MoeMail] 登录失败，cookies: {[c.name for c in s.cookies]}")
-        return ""
+        raise RuntimeError(
+            f"MoeMail 登录失败: 未获取到 session-token (HTTP {login_resp.status_code})"
+        )
 
     # 优先用这些域名（信誉较好，不易被 AWS/Google 等拒绝）
     _PREFERRED_DOMAINS = ("sall.cc", "cnmlgb.de", "zhooo.org", "coolkid.icu")
 
     def get_email(self) -> MailboxAccount:
-        # 每次调用都重新注册新账号，保证邮箱唯一
-        self._session_token = None
-        self._register_and_login()
+        self._session_token = self._configured_session_token or None
+        self._session = None
+        self._ensure_session()
         import random, string
         name = "".join(random.choices(string.ascii_letters + string.digits, k=8))
         # 获取可用域名列表，优先选信誉好的域名，避免被 AWS 等平台拒绝
@@ -670,9 +920,44 @@ class MoeMailMailbox(BaseMailbox):
         print(f"[MoeMail] 生成邮箱: {self._email} id={email_id} domain={domain} status={r.status_code}")
         if not email_id:
             print(f"[MoeMail] 生成失败: {data}")
-        if email_id:
-            self._email_count = getattr(self, '_email_count', 0) + 1
-        return MailboxAccount(email=self._email, account_id=str(email_id))
+            generate_error = data.get("error") or data.get("message") or r.text
+            raise RuntimeError(f"MoeMail 生成邮箱失败: {str(generate_error).strip() or f'HTTP {r.status_code}'}")
+        if not self._email:
+            raise RuntimeError("MoeMail 生成邮箱失败: 返回结果缺少 email")
+        self._email_count = getattr(self, '_email_count', 0) + 1
+        return MailboxAccount(
+            email=self._email,
+            account_id=str(email_id),
+            extra={
+                "provider_account": {
+                    "provider_type": "mailbox",
+                    "provider_name": "moemail",
+                    "login_identifier": getattr(self, "_username", ""),
+                    "display_name": getattr(self, "_username", "") or self._email,
+                    "credentials": {
+                        "username": getattr(self, "_username", ""),
+                        "password": getattr(self, "_password", ""),
+                        "session_token": self._session_token,
+                    },
+                    "metadata": {
+                        "api_url": self.api,
+                        "email": self._email,
+                    },
+                },
+                "provider_resource": {
+                    "provider_type": "mailbox",
+                    "provider_name": "moemail",
+                    "resource_type": "mailbox",
+                    "resource_identifier": str(email_id),
+                    "handle": self._email,
+                    "display_name": self._email,
+                    "metadata": {
+                        "email": self._email,
+                        "api_url": self.api,
+                    },
+                },
+            },
+        )
 
     def get_current_ids(self, account: MailboxAccount) -> set:
         try:
@@ -780,7 +1065,42 @@ class FreemailMailbox(BaseMailbox):
         email = data.get("email", "")
         self._email = email
         print(f"[Freemail] 生成邮箱: {email}")
-        return MailboxAccount(email=email, account_id=email)
+        provider_account = {
+            "provider_type": "mailbox",
+            "provider_name": "freemail",
+            "login_identifier": self.username or email,
+            "display_name": self.username or email,
+            "credentials": {},
+            "metadata": {
+                "api_url": self.api,
+                "auth_mode": "admin_token" if self.admin_token else "username_password",
+            },
+        }
+        if self.admin_token:
+            provider_account["credentials"]["admin_token"] = self.admin_token
+        if self.username:
+            provider_account["credentials"]["username"] = self.username
+        if self.password:
+            provider_account["credentials"]["password"] = self.password
+        return MailboxAccount(
+            email=email,
+            account_id=email,
+            extra={
+                "provider_account": provider_account,
+                "provider_resource": {
+                    "provider_type": "mailbox",
+                    "provider_name": "freemail",
+                    "resource_type": "mailbox",
+                    "resource_identifier": email,
+                    "handle": email,
+                    "display_name": email,
+                    "metadata": {
+                        "email": email,
+                        "api_url": self.api,
+                    },
+                },
+            },
+        )
 
     def get_current_ids(self, account: MailboxAccount) -> set:
         try:

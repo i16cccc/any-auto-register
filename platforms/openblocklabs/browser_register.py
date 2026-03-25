@@ -475,47 +475,14 @@ class OpenBlockLabsBrowserRegister:
         headless: bool,
         proxy: Optional[str] = None,
         otp_callback: Optional[Callable[[], str]] = None,
-        oauth_provider: str = "",
-        manual_oauth_timeout: int = 300,
-        chrome_user_data_dir: str = "",
-        chrome_cdp_url: str = "",
         log_fn: Callable[[str], None] = print,
     ):
         self.headless = headless
         self.proxy = proxy
         self.otp_callback = otp_callback
-        self.oauth_provider = oauth_provider
-        self.manual_oauth_timeout = manual_oauth_timeout
-        self.chrome_user_data_dir = chrome_user_data_dir
-        self.chrome_cdp_url = chrome_cdp_url
         self.log = log_fn
 
-    def _register_oauth(self, email: str, password: str) -> dict:
-        from core.oauth_browser import OAuthBrowser, browser_login_method_text, finalize_oauth_email
-        from core.oauth_browser import try_click_provider_on_page
-        with OAuthBrowser(
-            proxy=self.proxy, headless=False,
-            chrome_user_data_dir=self.chrome_user_data_dir,
-            chrome_cdp_url=self.chrome_cdp_url, log_fn=self.log,
-        ) as ob:
-            ob.goto(f"{DASHBOARD}/login")
-            time.sleep(2)
-            if self.oauth_provider:
-                try_click_provider_on_page(ob.active_page(), self.oauth_provider)
-            if self.chrome_user_data_dir or self.chrome_cdp_url:
-                ob.auto_select_google_account()
-            else:
-                self.log(f"请在浏览器中完成登录，可使用 {browser_login_method_text(self.oauth_provider)}，最长等待 {self.manual_oauth_timeout} 秒")
-            if not _wait_for_url(ob.active_page(), "dashboard.openblocklabs.com", timeout=self.manual_oauth_timeout):
-                raise RuntimeError(f"OpenBlockLabs 浏览器登录未在 {self.manual_oauth_timeout} 秒内完成")
-            wos = _get_wos_session(ob.active_page(), timeout=15)
-            resolved = finalize_oauth_email(email, email, "OpenBlockLabs")
-            return {"email": resolved, "password": password, "wos_session": wos}
-
-    def register(self, email: str, password: str, identity_provider: str = "mailbox") -> dict:
-        if identity_provider in ("oauth_browser", "oauth_manual"):
-            return self._register_oauth(email, password)
-
+    def run(self, email: str, password: str) -> dict:
         if not password:
             password = _generate_password()
             self.log("未提供密码，已自动生成随机密码")

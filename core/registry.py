@@ -1,8 +1,11 @@
 """平台插件注册表 - 自动扫描 platforms/ 目录加载插件"""
 import importlib
+import json
 import pkgutil
 from typing import Dict, Type
+from sqlmodel import Session, select
 from .base_platform import BasePlatform
+from .db import PlatformCapabilityOverrideModel, engine
 
 _registry: Dict[str, Type[BasePlatform]] = {}
 
@@ -30,8 +33,10 @@ def get(name: str) -> Type[BasePlatform]:
 
 
 def list_platforms() -> list:
-    from core.config_store import config_store
-    import json
+    overrides: dict[str, dict] = {}
+    with Session(engine) as session:
+        for item in session.exec(select(PlatformCapabilityOverrideModel)).all():
+            overrides[item.platform_name] = item.get_capabilities()
     result = []
     for cls in _registry.values():
         caps = {
@@ -39,13 +44,9 @@ def list_platforms() -> list:
             "supported_identity_modes": list(getattr(cls, "supported_identity_modes", ["mailbox"])),
             "supported_oauth_providers": list(getattr(cls, "supported_oauth_providers", [])),
         }
-        override_raw = config_store.get(f"platform_caps.{cls.name}", "")
-        if override_raw:
-            try:
-                override = json.loads(override_raw)
-                caps.update({k: v for k, v in override.items() if k in caps})
-            except Exception:
-                pass
+        override = overrides.get(cls.name) or {}
+        if isinstance(override, dict):
+            caps.update({k: v for k, v in override.items() if k in caps})
         result.append({"name": cls.name, "display_name": cls.display_name,
                        "version": cls.version, **caps})
     return result

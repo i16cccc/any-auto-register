@@ -1,22 +1,18 @@
-import json
+from __future__ import annotations
+
 from fastapi import APIRouter
-from core.registry import list_platforms
-from core.config_store import config_store
+
+from application.platforms import PlatformsService
 
 router = APIRouter(prefix="/platforms", tags=["platforms"])
+service = PlatformsService()
+
 
 @router.get("")
-def get_platforms():
-    return list_platforms()
+def list_platforms():
+    return service.list_platforms()
 
-@router.put("/{name}/capabilities")
-def update_platform_capabilities(name: str, body: dict):
-    allowed = {"supported_executors", "supported_identity_modes", "supported_oauth_providers"}
-    safe = {k: v for k, v in body.items() if k in allowed}
-    config_store.set(f"platform_caps.{name}", json.dumps(safe))
-    return {"ok": True}
 
-@router.delete("/{name}/capabilities")
-def reset_platform_capabilities(name: str):
-    config_store.set(f"platform_caps.{name}", "")
-    return {"ok": True}
+@router.get("/{platform}/desktop-state")
+def get_desktop_state(platform: str):
+    return service.get_desktop_state(platform)

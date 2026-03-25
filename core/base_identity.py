@@ -83,6 +83,9 @@ class MailboxIdentityProvider(BaseIdentityProvider):
 
         mail_acct = self.mailbox.get_email()
         email = getattr(mail_acct, "email", "") or ""
+        if not requested_email and not email:
+            provider_name = getattr(self.mailbox, "__class__", type(self.mailbox)).__name__
+            raise ValueError(f"{provider_name} 未返回可用邮箱，请检查 mailbox provider 配置或服务状态")
         if requested_email and email and requested_email != email:
             raise ValueError(f"传入邮箱 {requested_email} 与当前邮箱 provider 返回的 {email} 不一致")
         before_ids = self.mailbox.get_current_ids(mail_acct) if mail_acct else set()
