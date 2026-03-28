@@ -11,31 +11,20 @@ import { Badge } from '@/components/ui/badge'
 import { Play, CheckCircle, XCircle, Loader2, Orbit, Mail, ScanText, ShieldCheck, Workflow } from 'lucide-react'
 import { getTaskStatusText, isTerminalTaskStatus, TASK_STATUS_VARIANTS } from '@/lib/tasks'
 
-const FALLBACK_PLATFORMS = [
-  { name: 'chatgpt', display_name: 'ChatGPT' },
-  { name: 'cursor', display_name: 'Cursor' },
-  { name: 'grok', display_name: 'Grok' },
-  { name: 'kiro', display_name: 'Kiro (AWS Builder ID)' },
-  { name: 'openblocklabs', display_name: 'OpenBlockLabs' },
-  { name: 'tavily', display_name: 'Tavily' },
-  { name: 'trae', display_name: 'Trae.ai' },
-]
-
 const DEFAULT_FORM: Record<string, any> = {
-  platform: 'trae',
+  platform: '',
   email: '',
   password: '',
   count: 1,
   proxy: '',
-  executor_type: 'protocol',
+  executor_type: '',
   captcha_solver: 'auto',
-  identity_provider: 'mailbox',
+  identity_provider: '',
   oauth_provider: '',
   oauth_email_hint: '',
   chrome_user_data_dir: '',
   chrome_cdp_url: '',
-  mail_provider: 'moemail',
-  solver_url: 'http://localhost:8889',
+  mail_provider: '',
 }
 
 function getProviderSetting(settings: ProviderSetting[] = [], providerKey: string) {
@@ -49,6 +38,10 @@ function getProviderMergedValues(setting: ProviderSetting | null) {
   }
 }
 
+function getDefaultProviderKey(settings: ProviderSetting[] = []) {
+  return settings.find(item => item.is_default)?.provider_key || settings[0]?.provider_key || ''
+}
+
 export default function Register() {
   const [form, setForm] = useState<Record<string, any>>(DEFAULT_FORM)
   const [platforms, setPlatforms] = useState<any[]>([])
@@ -58,6 +51,9 @@ export default function Register() {
     mailbox_settings: [],
     captcha_settings: [],
     captcha_policy: {},
+    executor_options: [],
+    identity_mode_options: [],
+    oauth_provider_options: [],
   })
   const [optionsError, setOptionsError] = useState('')
   const [task, setTask] = useState<any>(null)
@@ -95,7 +91,16 @@ export default function Register() {
         setConfigOptions(options)
         setOptionsError('')
       } else {
-        setConfigOptions({ mailbox_providers: [], captcha_providers: [], mailbox_settings: [], captcha_settings: [], captcha_policy: {} })
+        setConfigOptions({
+          mailbox_providers: [],
+          captcha_providers: [],
+          mailbox_settings: [],
+          captcha_settings: [],
+          captcha_policy: {},
+          executor_options: [],
+          identity_mode_options: [],
+          oauth_provider_options: [],
+        })
         setOptionsError('未加载到 provider 元数据。请重启后端后刷新页面。')
       }
       setForm(f => {
@@ -108,8 +113,7 @@ export default function Register() {
           oauth_email_hint: cfg.oauth_email_hint || f.oauth_email_hint,
           chrome_user_data_dir: cfg.chrome_user_data_dir || f.chrome_user_data_dir,
           chrome_cdp_url: cfg.chrome_cdp_url || f.chrome_cdp_url,
-          mail_provider: cfg.mail_provider || f.mail_provider,
-          solver_url: cfg.solver_url || f.solver_url,
+          mail_provider: getDefaultProviderKey((options?.mailbox_settings as ProviderSetting[]) || []) || f.mail_provider,
         }
         const providerFieldKeys = listProviderFieldKeys([
           ...((options?.mailbox_providers as ProviderOption[]) || []),
@@ -124,11 +128,15 @@ export default function Register() {
   }, [])
 
   const currentPlatform = platforms.find((p: any) => p.name === form.platform) || null
-  const platformOptionsSource = platforms.length > 0 ? platforms : FALLBACK_PLATFORMS
-  const platformOptions = platformOptionsSource.map((p: any) => [p.name, p.display_name])
-  const supportedExecutors = currentPlatform?.supported_executors || ['protocol']
+  const platformOptions = platforms.map((p: any) => [p.name, p.display_name])
+  const supportedExecutors = currentPlatform?.supported_executors || []
   const registrationOptions = buildRegistrationOptions(currentPlatform)
-  const executorOptions = buildExecutorOptions(form.identity_provider, supportedExecutors, hasReusableOAuthBrowser(form))
+  const executorOptions = buildExecutorOptions(
+    form.identity_provider,
+    supportedExecutors,
+    hasReusableOAuthBrowser(form),
+    currentPlatform?.supported_executor_options || [],
+  )
   const mailboxProviderOptions = getProviderSelectOptions(configOptions.mailbox_providers || [])
   const currentMailboxProvider = (configOptions.mailbox_providers || []).find(provider => provider.value === form.mail_provider) || null
   const currentMailboxSetting = getProviderSetting(configOptions.mailbox_settings || [], form.mail_provider)
@@ -136,6 +144,13 @@ export default function Register() {
     ...(configOptions.mailbox_providers || []),
     ...(configOptions.captcha_providers || []),
   ])
+
+  useEffect(() => {
+    const defaultProviderKey = getDefaultProviderKey(configOptions.mailbox_settings || [])
+    if (form.identity_provider === 'mailbox' && !form.mail_provider && defaultProviderKey) {
+      set('mail_provider', defaultProviderKey)
+    }
+  }, [form.identity_provider, form.mail_provider, configOptions.mailbox_settings])
 
   useEffect(() => {
     if (!currentMailboxProvider) return
@@ -157,13 +172,13 @@ export default function Register() {
   }, [form.mail_provider, currentMailboxProvider, currentMailboxSetting])
 
   useEffect(() => {
-    if (!platformOptionsSource.some((p: any) => p.name === form.platform)) {
-      const fallback = platformOptionsSource[0]?.name || 'trae'
+    if (!platforms.some((p: any) => p.name === form.platform)) {
+      const fallback = platforms[0]?.name || ''
       if (fallback !== form.platform) {
         set('platform', fallback)
       }
     }
-  }, [form.platform, platforms.length])
+  }, [form.platform, platforms])
 
   useEffect(() => {
     if (registrationOptions.length === 0) return
@@ -186,19 +201,21 @@ export default function Register() {
     if (!validExecutors.some(option => option.value === form.executor_type)) {
       const nextExecutor = form.identity_provider === 'oauth_browser'
         ? pickOAuthExecutor(supportedExecutors, form.executor_type, hasReusableOAuthBrowser(form))
-        : ((supportedExecutors.includes(form.executor_type) && form.executor_type) ? form.executor_type : supportedExecutors[0] || 'protocol')
+        : ((supportedExecutors.includes(form.executor_type) && form.executor_type) ? form.executor_type : supportedExecutors[0] || '')
       set('executor_type', validExecutors.find(option => option.value === nextExecutor)?.value || validExecutors[0].value)
     }
   }, [executorOptions, supportedExecutors, form.executor_type, form.identity_provider, form.chrome_user_data_dir, form.chrome_cdp_url])
 
   const submit = async () => {
     const extra: Record<string, any> = {
-      mail_provider: form.mail_provider,
       identity_provider: form.identity_provider,
       oauth_provider: form.oauth_provider,
       oauth_email_hint: form.oauth_email_hint,
       chrome_user_data_dir: form.chrome_user_data_dir || undefined,
       chrome_cdp_url: form.chrome_cdp_url || undefined,
+    }
+    if (form.mail_provider) {
+      extra.mail_provider = form.mail_provider
     }
     allProviderFieldKeys.forEach(fieldKey => {
       if (form[fieldKey] !== undefined) {
@@ -404,7 +421,13 @@ export default function Register() {
                     {optionsError}
                   </div>
                 )}
-                <Select label="邮箱服务" k="mail_provider" options={mailboxProviderOptions.length > 0 ? mailboxProviderOptions : [['moemail', 'MoeMail (sall.cc)']]} />
+                {mailboxProviderOptions.length > 0 ? (
+                  <Select label="邮箱服务" k="mail_provider" options={mailboxProviderOptions} />
+                ) : (
+                  <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+                    当前没有已启用的邮箱 provider，请先到设置页新增并启用一个默认邮箱 provider。
+                  </div>
+                )}
                 {currentMailboxProvider?.description ? (
                   <p className="text-xs leading-5 text-[var(--text-muted)]">{currentMailboxProvider.description}</p>
                 ) : null}

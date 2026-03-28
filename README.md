@@ -7,7 +7,7 @@
 ## 功能特性
 
 - **多平台支持**：Trae.ai、Tavily、Cursor、Kiro、ChatGPT、OpenBlockLabs，支持自定义插件扩展
-- **多邮箱服务**：MoeMail（自建）、Laoudo、DuckMail、Cloudflare Worker 自建邮箱
+- **多邮箱服务**：MoeMail（自建）、Laoudo、DuckMail、Testmail、Cloudflare Worker 自建邮箱
 - **多执行模式**：API 协议（无浏览器）、无头浏览器（待实现）、有头浏览器（待实现）（各平台按需支持）
 - **验证码服务**：YesCaptcha、2Captcha、本地 Solver（Camoufox）
 - **代理池管理**：自动轮询、成功率统计、自动禁用失效代理
@@ -158,6 +158,21 @@ npm run dev
 ### DuckMail
 
 公共临时邮箱服务，无需配置，直接使用。部分地区需要代理。
+
+### Testmail
+
+`testmail.app` 的 namespace 邮箱模式。系统会自动生成地址：
+
+- `{namespace}.{随机tag}@inbox.testmail.app`
+
+适合并发任务，因为每次注册都会分配新的 tag，并在查询时自动带上 `tag + timestamp_from` 过滤旧邮件。
+
+| 参数 | 说明 |
+|------|------|
+| API URL | 默认 `https://api.testmail.app/api/json` |
+| Namespace | 你的 namespace，例如 `3xw8n` |
+| Tag Prefix | 可选，给随机 tag 增加前缀，便于分类 |
+| API Key | testmail.app 控制台里的 API Key |
 
 ## 验证码服务配置
 

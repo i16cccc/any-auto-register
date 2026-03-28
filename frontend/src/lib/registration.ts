@@ -1,34 +1,14 @@
-export const ALL_OAUTH_PROVIDERS = [
-  { value: 'google', label: 'Google' },
-  { value: 'github', label: 'GitHub' },
-  { value: 'microsoft', label: 'Microsoft' },
-  { value: 'linkedin', label: 'LinkedIn' },
-  { value: 'apple', label: 'Apple' },
-  { value: 'x', label: 'X' },
-  { value: 'builderid', label: 'Builder ID' },
-]
-
-export const EXECUTOR_LABELS: Record<string, string> = {
-  protocol: '协议模式',
-  headless: '后台浏览器自动',
-  headed: '可视浏览器自动',
-}
-
-export const IDENTITY_MODE_LABELS: Record<string, string> = {
-  mailbox: '系统邮箱',
-  oauth_browser: '第三方账号',
+type ChoiceOption = {
+  value: string
+  label: string
 }
 
 export function hasReusableOAuthBrowser(config: { chrome_user_data_dir?: string; chrome_cdp_url?: string }) {
   return Boolean(config.chrome_user_data_dir?.trim() || config.chrome_cdp_url?.trim())
 }
 
-export function getOAuthProviderLabel(provider: string) {
-  return ALL_OAUTH_PROVIDERS.find(item => item.value === provider)?.label || provider
-}
-
-export function getIdentityModeLabel(mode: string) {
-  return IDENTITY_MODE_LABELS[mode] || mode
+function getOptionLabel(value: string, options: ChoiceOption[] = []) {
+  return options.find(item => item.value === value)?.label || value
 }
 
 export function pickOAuthExecutor(
@@ -48,12 +28,14 @@ export function pickOAuthExecutor(
   if (supportedExecutors.includes('headless')) {
     return 'headless'
   }
-  return supportedExecutors[0] || 'protocol'
+  return supportedExecutors[0] || ''
 }
 
 export function buildRegistrationOptions(platformMeta: any) {
-  const supportedModes: string[] = platformMeta?.supported_identity_modes || ['mailbox']
+  const supportedModes: string[] = platformMeta?.supported_identity_modes || []
   const supportedOAuth: string[] = platformMeta?.supported_oauth_providers || []
+  const identityModeOptions: ChoiceOption[] = platformMeta?.supported_identity_mode_options || []
+  const oauthProviderOptions: ChoiceOption[] = platformMeta?.supported_oauth_provider_options || []
   const options: Array<{
     key: string
     label: string
@@ -65,8 +47,8 @@ export function buildRegistrationOptions(platformMeta: any) {
   if (supportedModes.includes('mailbox')) {
     options.push({
       key: 'mailbox',
-      label: '系统邮箱',
-      description: '使用系统集成邮箱自动收验证码并完成注册',
+      label: getOptionLabel('mailbox', identityModeOptions),
+      description: `使用${getOptionLabel('mailbox', identityModeOptions)}自动收验证码并完成注册`,
       identityProvider: 'mailbox',
       oauthProvider: '',
     })
@@ -74,10 +56,11 @@ export function buildRegistrationOptions(platformMeta: any) {
 
   if (supportedModes.includes('oauth_browser')) {
     supportedOAuth.forEach((provider: string) => {
+      const providerLabel = getOptionLabel(provider, oauthProviderOptions)
       options.push({
         key: `oauth:${provider}`,
-        label: getOAuthProviderLabel(provider),
-        description: `使用 ${getOAuthProviderLabel(provider)} 账号自动创建平台账号`,
+        label: providerLabel,
+        description: `使用 ${providerLabel} 账号自动创建平台账号`,
         identityProvider: 'oauth_browser',
         oauthProvider: provider,
       })
@@ -91,11 +74,12 @@ export function buildExecutorOptions(
   identityProvider: string,
   supportedExecutors: string[],
   reusableBrowser: boolean,
+  executorOptions: ChoiceOption[] = [],
 ) {
   return supportedExecutors.map((executor) => {
     const option = {
       value: executor,
-      label: EXECUTOR_LABELS[executor] || executor,
+      label: getOptionLabel(executor, executorOptions),
       description: '',
       disabled: false,
       reason: '',

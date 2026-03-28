@@ -6,16 +6,9 @@ from infrastructure.provider_definitions_repository import ProviderDefinitionsRe
 
 class ConfigRepository:
     BASE_KEYS = {
-        "laoudo_auth", "laoudo_email", "laoudo_account_id",
-        "yescaptcha_key", "twocaptcha_key", "solver_url",
-        "default_executor", "default_captcha_solver",
+        "default_executor",
         "default_identity_provider", "default_oauth_provider", "oauth_email_hint",
         "chrome_user_data_dir", "chrome_cdp_url",
-        "duckmail_api_url", "duckmail_provider_url", "duckmail_bearer",
-        "freemail_api_url", "freemail_admin_token", "freemail_username", "freemail_password",
-        "moemail_api_url", "moemail_username", "moemail_password", "moemail_session_token",
-        "mail_provider",
-        "cfworker_api_url", "cfworker_admin_token", "cfworker_domain", "cfworker_fingerprint",
         "cpa_api_url", "cpa_api_key",
         "team_manager_url", "team_manager_key",
     }

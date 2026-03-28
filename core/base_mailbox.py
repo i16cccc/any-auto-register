@@ -85,9 +85,9 @@ def _create_tempmail(extra: dict, proxy: str | None) -> 'BaseMailbox':
 
 def _create_duckmail(extra: dict, proxy: str | None) -> 'BaseMailbox':
     return DuckMailMailbox(
-        api_url=extra.get("duckmail_api_url", "https://www.duckmail.sbs"),
-        provider_url=extra.get("duckmail_provider_url", "https://api.duckmail.sbs"),
-        bearer=extra.get("duckmail_bearer", "kevin273945"),
+        api_url=extra.get("duckmail_api_url", ""),
+        provider_url=extra.get("duckmail_provider_url", ""),
+        bearer=extra.get("duckmail_bearer", ""),
         proxy=proxy,
     )
 
@@ -122,6 +122,16 @@ def _create_cfworker(extra: dict, proxy: str | None) -> 'BaseMailbox':
     )
 
 
+def _create_testmail(extra: dict, proxy: str | None) -> 'BaseMailbox':
+    return TestmailMailbox(
+        api_url=extra.get("testmail_api_url", ""),
+        api_key=extra.get("testmail_api_key", ""),
+        namespace=extra.get("testmail_namespace", ""),
+        tag_prefix=extra.get("testmail_tag_prefix", ""),
+        proxy=proxy,
+    )
+
+
 def _create_laoudo(extra: dict, proxy: str | None) -> 'BaseMailbox':
     return LaoudoMailbox(
         auth_token=extra.get("laoudo_auth", ""),
@@ -136,6 +146,7 @@ MAILBOX_FACTORY_REGISTRY = {
     "freemail_api": _create_freemail,
     "moemail_api": _create_moemail,
     "cfworker_admin_api": _create_cfworker,
+    "testmail_api": _create_testmail,
     "laoudo_api": _create_laoudo,
     # backward-compat fallback
     "tempmail_lol": _create_tempmail,
@@ -143,6 +154,7 @@ MAILBOX_FACTORY_REGISTRY = {
     "freemail": _create_freemail,
     "moemail": _create_moemail,
     "cfworker": _create_cfworker,
+    "testmail": _create_testmail,
     "laoudo": _create_laoudo,
 }
 
@@ -152,11 +164,17 @@ def create_mailbox(provider: str, extra: dict = None, proxy: str = None) -> 'Bas
     from infrastructure.provider_definitions_repository import ProviderDefinitionsRepository
     from infrastructure.provider_settings_repository import ProviderSettingsRepository
 
-    provider_key = str(provider or "moemail")
+    provider_key = str(provider or "").strip()
+    if not provider_key:
+        raise RuntimeError("未选择邮箱 provider，请先在设置页配置并启用默认邮箱 provider")
     definition = ProviderDefinitionsRepository().get_by_key("mailbox", provider_key)
+    if not definition or not definition.enabled:
+        raise RuntimeError(f"邮箱 provider 不存在或未启用: {provider_key}")
     resolved_extra = ProviderSettingsRepository().resolve_runtime_settings("mailbox", provider_key, extra or {})
     lookup_key = definition.driver_type if definition else provider_key
-    factory = MAILBOX_FACTORY_REGISTRY.get(lookup_key, _create_laoudo)
+    factory = MAILBOX_FACTORY_REGISTRY.get(lookup_key)
+    if not factory:
+        raise RuntimeError(f"邮箱 provider 驱动未注册: {lookup_key}")
     return factory(resolved_extra, proxy)
 
 
@@ -467,9 +485,9 @@ class TempMailLolMailbox(BaseMailbox):
 class DuckMailMailbox(BaseMailbox):
     """DuckMail 自动生成邮箱（随机创建账号）"""
 
-    def __init__(self, api_url: str = "https://www.duckmail.sbs",
-                 provider_url: str = "https://api.duckmail.sbs",
-                 bearer: str = "kevin273945",
+    def __init__(self, api_url: str = "",
+                 provider_url: str = "",
+                 bearer: str = "",
                  proxy: str = None):
         self.api = api_url.rstrip("/")
         self.provider_url = provider_url
@@ -750,13 +768,13 @@ class MoeMailMailbox(BaseMailbox):
 
     def __init__(
         self,
-        api_url: str = "https://sall.cc",
+        api_url: str = "",
         username: str = "",
         password: str = "",
         session_token: str = "",
         proxy: str = None,
     ):
-        self.api = _normalize_api_base_url(api_url, default="https://sall.cc", label="MoeMail API URL")
+        self.api = _normalize_api_base_url(api_url, default="", label="MoeMail API URL")
         self.proxy = {"http": proxy, "https": proxy} if proxy else None
         self._configured_username = str(username or "").strip()
         self._configured_password = str(password or "")
@@ -1155,6 +1173,190 @@ class FreemailMailbox(BaseMailbox):
                         for key in ("preview", "subject", "html", "text", "content", "body")
                     )
                     link = _extract_verification_link(text, keyword)
+                    if link:
+                        return link
+            except Exception:
+                pass
+            time.sleep(3)
+        raise TimeoutError(f"等待验证链接超时 ({timeout}s)")
+
+
+class TestmailMailbox(BaseMailbox):
+    """testmail.app 邮箱服务，地址格式为 {namespace}.{tag}@inbox.testmail.app。"""
+
+    def __init__(
+        self,
+        api_url: str = "",
+        api_key: str = "",
+        namespace: str = "",
+        tag_prefix: str = "",
+        proxy: str = None,
+    ):
+        self.api = _normalize_api_base_url(api_url, default="", label="Testmail API URL")
+        self.api_key = str(api_key or "").strip()
+        self.namespace = str(namespace or "").strip()
+        self.tag_prefix = str(tag_prefix or "").strip().strip(".")
+        self.proxy = {"http": proxy, "https": proxy} if proxy else None
+
+    def _assert_ready(self) -> None:
+        if not self.api_key:
+            raise RuntimeError("Testmail 未配置 API Key")
+        if not self.namespace:
+            raise RuntimeError("Testmail 未配置 namespace")
+
+    def _build_tag(self) -> str:
+        import random
+        import string
+
+        suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=12))
+        return f"{self.tag_prefix}.{suffix}" if self.tag_prefix else suffix
+
+    def _query_inbox(
+        self,
+        *,
+        tag: str,
+        timestamp_from: int | None,
+        livequery: bool = False,
+        limit: int = 20,
+    ) -> list[dict]:
+        import requests
+
+        params = {
+            "apikey": self.api_key,
+            "namespace": self.namespace,
+            "tag": tag,
+            "limit": limit,
+        }
+        if timestamp_from is not None:
+            params["timestamp_from"] = int(timestamp_from)
+        if livequery:
+            params["livequery"] = "true"
+        response = requests.get(self.api, params=params, proxies=self.proxy, timeout=15)
+        payload = response.json()
+        if payload.get("result") == "fail":
+            raise RuntimeError(f"Testmail 查询失败: {payload.get('message') or response.text}")
+        return payload.get("emails", []) or []
+
+    @staticmethod
+    def _message_id(mail: dict) -> str:
+        return str(
+            mail.get("id")
+            or mail.get("message_id")
+            or f"{mail.get('timestamp', '')}:{mail.get('tag', '')}:{mail.get('subject', '')}"
+        )
+
+    @staticmethod
+    def _message_text(mail: dict) -> str:
+        return " ".join(
+            str(mail.get(key, "") or "")
+            for key in ("subject", "text", "html")
+        )
+
+    def get_email(self) -> MailboxAccount:
+        import time
+
+        self._assert_ready()
+        tag = self._build_tag()
+        email = f"{self.namespace}.{tag}@inbox.testmail.app"
+        created_at_ms = int(time.time() * 1000)
+        return MailboxAccount(
+            email=email,
+            account_id=tag,
+            extra={
+                "provider_account": {
+                    "provider_type": "mailbox",
+                    "provider_name": "testmail",
+                    "login_identifier": self.namespace,
+                    "display_name": self.namespace,
+                    "credentials": {
+                        "api_key": self.api_key,
+                    },
+                    "metadata": {
+                        "api_url": self.api,
+                        "namespace": self.namespace,
+                        "tag_prefix": self.tag_prefix,
+                    },
+                },
+                "provider_resource": {
+                    "provider_type": "mailbox",
+                    "provider_name": "testmail",
+                    "resource_type": "mailbox",
+                    "resource_identifier": email,
+                    "handle": email,
+                    "display_name": email,
+                    "metadata": {
+                        "email": email,
+                        "namespace": self.namespace,
+                        "tag": tag,
+                        "api_url": self.api,
+                        "created_at_ms": created_at_ms,
+                    },
+                },
+            },
+        )
+
+    def get_current_ids(self, account: MailboxAccount) -> set:
+        tag = str(account.account_id or "")
+        if not tag:
+            return set()
+        started = ((account.extra or {}).get("provider_resource") or {}).get("metadata", {}).get("created_at_ms")
+        try:
+            mails = self._query_inbox(tag=tag, timestamp_from=started, limit=20)
+            return {self._message_id(mail) for mail in mails if self._message_id(mail)}
+        except Exception:
+            return set()
+
+    def wait_for_code(self, account: MailboxAccount, keyword: str = "",
+                      timeout: int = 120, before_ids: set = None, code_pattern: str = None) -> str:
+        import re
+        import time
+
+        tag = str(account.account_id or "")
+        if not tag:
+            raise RuntimeError("Testmail mailbox 缺少 tag")
+        seen = set(before_ids or [])
+        started = ((account.extra or {}).get("provider_resource") or {}).get("metadata", {}).get("created_at_ms")
+        pattern = re.compile(code_pattern) if code_pattern else None
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                mails = self._query_inbox(tag=tag, timestamp_from=started, limit=20)
+                for mail in sorted(mails, key=lambda item: item.get("timestamp", 0), reverse=True):
+                    mid = self._message_id(mail)
+                    if not mid or mid in seen:
+                        continue
+                    seen.add(mid)
+                    text = self._message_text(mail)
+                    if keyword and keyword.lower() not in text.lower():
+                        continue
+                    text = re.sub(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '', text)
+                    match = pattern.search(text) if pattern else re.search(r'(?<!#)(?<!\d)(\d{6})(?!\d)', text)
+                    if match:
+                        return match.group(1) if match.groups() else match.group(0)
+            except Exception:
+                pass
+            time.sleep(3)
+        raise TimeoutError(f"等待验证码超时 ({timeout}s)")
+
+    def wait_for_link(self, account: MailboxAccount, keyword: str = "",
+                      timeout: int = 120, before_ids: set = None) -> str:
+        import time
+
+        tag = str(account.account_id or "")
+        if not tag:
+            raise RuntimeError("Testmail mailbox 缺少 tag")
+        seen = set(before_ids or [])
+        started = ((account.extra or {}).get("provider_resource") or {}).get("metadata", {}).get("created_at_ms")
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                mails = self._query_inbox(tag=tag, timestamp_from=started, limit=20)
+                for mail in sorted(mails, key=lambda item: item.get("timestamp", 0), reverse=True):
+                    mid = self._message_id(mail)
+                    if not mid or mid in seen:
+                        continue
+                    seen.add(mid)
+                    link = _extract_verification_link(self._message_text(mail), keyword)
                     if link:
                         return link
             except Exception:

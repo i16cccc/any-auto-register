@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { getConfig, getConfigOptions, getPlatforms } from '@/lib/app-data'
 import type { ConfigOptionsResponse } from '@/lib/config-options'
-import { getCaptchaStrategyLabel, listProviderFieldKeys } from '@/lib/config-options'
+import { getCaptchaStrategyLabel } from '@/lib/config-options'
 import { apiDownload, apiFetch, triggerBrowserDownload } from '@/lib/utils'
 import { buildExecutorOptions, buildRegistrationOptions, hasReusableOAuthBrowser, pickOAuthExecutor } from '@/lib/registration'
 import { TaskLogPanel } from '@/components/tasks/TaskLogPanel'
@@ -126,6 +126,9 @@ function RegisterModal({
     mailbox_settings: [],
     captcha_settings: [],
     captcha_policy: {},
+    executor_options: [],
+    identity_mode_options: [],
+    oauth_provider_options: [],
   })
   const [configLoading, setConfigLoading] = useState(true)
   const [regCount, setRegCount] = useState(1)
@@ -139,10 +142,15 @@ function RegisterModal({
   const [done, setDone] = useState(false)
   const [starting, setStarting] = useState(false)
 
-  const supportedExecutors: string[] = platformMeta?.supported_executors || ['protocol']
+  const supportedExecutors: string[] = platformMeta?.supported_executors || []
   const registrationOptions = buildRegistrationOptions(platformMeta)
   const reusableBrowser = hasReusableOAuthBrowser(config || {})
-  const executorOptions = buildExecutorOptions(selection.identityProvider, supportedExecutors, reusableBrowser)
+  const executorOptions = buildExecutorOptions(
+    selection.identityProvider,
+    supportedExecutors,
+    reusableBrowser,
+    platformMeta?.supported_executor_options || [],
+  )
   const selectedRegistration = registrationOptions.find(option =>
     option.identityProvider === selection.identityProvider && option.oauthProvider === selection.oauthProvider,
   )
@@ -165,7 +173,16 @@ function RegisterModal({
       .catch(() => {
         if (!active) return
         setConfig({})
-        setConfigOptions({ mailbox_providers: [], captcha_providers: [], mailbox_settings: [], captcha_settings: [], captcha_policy: {} })
+        setConfigOptions({
+          mailbox_providers: [],
+          captcha_providers: [],
+          mailbox_settings: [],
+          captcha_settings: [],
+          captcha_policy: {},
+          executor_options: [],
+          identity_mode_options: [],
+          oauth_provider_options: [],
+        })
       })
       .finally(() => {
         if (active) setConfigLoading(false)
@@ -185,11 +202,16 @@ function RegisterModal({
       const oauthProvider = identityProvider === 'oauth_browser'
         ? (current.oauthProvider || defaultRegistration.oauthProvider)
         : ''
-      const validExecutorOptions = buildExecutorOptions(identityProvider, supportedExecutors, hasReusableOAuthBrowser(cfg))
+      const validExecutorOptions = buildExecutorOptions(
+        identityProvider,
+        supportedExecutors,
+        hasReusableOAuthBrowser(cfg),
+        platformMeta?.supported_executor_options || [],
+      )
         .filter(option => !option.disabled)
       const preferredExecutor = identityProvider === 'oauth_browser'
-        ? pickOAuthExecutor(supportedExecutors, cfg.default_executor || 'headed', hasReusableOAuthBrowser(cfg))
-        : ((cfg.default_executor && supportedExecutors.includes(cfg.default_executor)) ? cfg.default_executor : supportedExecutors[0] || 'protocol')
+        ? pickOAuthExecutor(supportedExecutors, cfg.default_executor || '', hasReusableOAuthBrowser(cfg))
+        : ((cfg.default_executor && supportedExecutors.includes(cfg.default_executor)) ? cfg.default_executor : supportedExecutors[0] || '')
       const executorType = validExecutorOptions.some(option => option.value === current.executorType)
         ? current.executorType
         : (validExecutorOptions.find(option => option.value === preferredExecutor)?.value || validExecutorOptions[0]?.value || '')
@@ -206,7 +228,12 @@ function RegisterModal({
 
   useEffect(() => {
     if (!selection.identityProvider) return
-    const validExecutorOptions = buildExecutorOptions(selection.identityProvider, supportedExecutors, reusableBrowser)
+    const validExecutorOptions = buildExecutorOptions(
+      selection.identityProvider,
+      supportedExecutors,
+      reusableBrowser,
+      platformMeta?.supported_executor_options || [],
+    )
       .filter(option => !option.disabled)
     if (!validExecutorOptions.some(option => option.value === selection.executorType)) {
       setSelection(current => {
@@ -222,6 +249,8 @@ function RegisterModal({
     }
   }, [selection.identityProvider, selection.oauthProvider, selection.executorType, supportedExecutors, reusableBrowser])
 
+  const defaultMailboxProvider = (configOptions.mailbox_settings || []).find(item => item.is_default) || configOptions.mailbox_settings?.[0] || null
+
   const start = async () => {
     setStarting(true)
     try {
@@ -232,18 +261,12 @@ function RegisterModal({
         oauth_email_hint: cfg.oauth_email_hint,
         chrome_user_data_dir: cfg.chrome_user_data_dir,
         chrome_cdp_url: cfg.chrome_cdp_url,
-        mail_provider: cfg.mail_provider || 'moemail',
       }
-      listProviderFieldKeys([
-        ...(configOptions.mailbox_providers || []),
-        ...(configOptions.captcha_providers || []),
-      ]).forEach((fieldKey) => {
-        if (cfg[fieldKey] !== undefined) {
-          extra[fieldKey] = cfg[fieldKey]
+      if (selection.identityProvider === 'mailbox') {
+        if (!defaultMailboxProvider?.provider_key) {
+          throw new Error('未配置默认邮箱 provider，请先到设置页启用一个邮箱 provider')
         }
-      })
-      if (extra.solver_url === undefined || extra.solver_url === '') {
-        extra.solver_url = 'http://localhost:8889'
+        extra.mail_provider = defaultMailboxProvider.provider_key
       }
       const res = await apiFetch('/tasks/register', {
         method: 'POST',
@@ -1097,7 +1120,7 @@ function WorkspaceMetric({
 // ── Main ────────────────────────────────────────────────────
 export default function Accounts() {
   const { platform } = useParams<{ platform: string }>()
-  const [tab, setTab] = useState(platform || 'trae')
+  const [tab, setTab] = useState(platform || '')
   useEffect(() => { if (platform) { setTab(platform) } }, [platform])
 
   const [accounts, setAccounts] = useState<any[]>([])
@@ -1119,8 +1142,11 @@ export default function Accounts() {
       const map: Record<string, any> = {}
       list.forEach(p => { map[p.name] = p })
       setPlatformsMap(map)
+      if (!platform && !tab && list[0]?.name) {
+        setTab(list[0].name)
+      }
     }).catch(() => {})
-  }, [])
+  }, [platform, tab])
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search), 400)

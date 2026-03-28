@@ -5,7 +5,11 @@ from datetime import datetime, timezone
 from sqlmodel import Session, select
 
 from core.db import ProviderDefinitionModel, ProviderSettingModel, engine
-from core.provider_drivers import get_driver_template, list_builtin_provider_definitions, list_driver_templates
+from core.provider_drivers import (
+    get_driver_template,
+    list_builtin_provider_definitions,
+    list_driver_templates,
+)
 
 
 def _utcnow() -> datetime:
@@ -20,40 +24,64 @@ class ProviderDefinitionsRepository:
                 for item in session.exec(select(ProviderDefinitionModel)).all()
             }
             changed = False
-            for definition in list_builtin_provider_definitions():
-                key = (str(definition.get("provider_type") or ""), str(definition.get("provider_key") or ""))
-                if key in existing:
-                    item = existing[key]
-                    if item.is_builtin:
-                        item.label = str(definition.get("label") or item.label)
-                        item.description = str(definition.get("description") or item.description)
-                        item.driver_type = str(definition.get("driver_type") or item.driver_type)
-                        item.default_auth_mode = str(definition.get("default_auth_mode") or item.default_auth_mode)
-                        item.enabled = bool(definition.get("enabled", True))
-                        item.set_auth_modes(list(definition.get("auth_modes") or []))
-                        item.set_fields(list(definition.get("fields") or []))
-                        item.set_metadata(dict(definition.get("metadata") or {}))
-                        item.updated_at = _utcnow()
-                        session.add(item)
+            for provider_type in ("mailbox", "captcha"):
+                for template in list_builtin_provider_definitions(provider_type):
+                    provider_key = str(template.get("provider_key") or "").strip()
+                    driver_type = str(template.get("driver_type") or "").strip()
+                    if not provider_key or not driver_type:
+                        continue
+                    item = existing.get((provider_type, provider_key))
+                    is_new = item is None
+                    if not item:
+                        item = ProviderDefinitionModel(
+                            provider_type=provider_type,
+                            provider_key=provider_key,
+                        )
+                        item.created_at = _utcnow()
+                        item.enabled = True
                         changed = True
-                    continue
-                item = ProviderDefinitionModel(
-                    provider_type=key[0],
-                    provider_key=key[1],
-                    label=str(definition.get("label") or key[1]),
-                    description=str(definition.get("description") or ""),
-                    driver_type=str(definition.get("driver_type") or ""),
-                    default_auth_mode=str(definition.get("default_auth_mode") or ""),
-                    enabled=bool(definition.get("enabled", True)),
-                    is_builtin=bool(definition.get("is_builtin", False)),
-                )
-                item.set_auth_modes(list(definition.get("auth_modes") or []))
-                item.set_fields(list(definition.get("fields") or []))
-                item.set_metadata(dict(definition.get("metadata") or {}))
-                item.created_at = _utcnow()
-                item.updated_at = _utcnow()
-                session.add(item)
-                changed = True
+                    if not item.label:
+                        item.label = str(template.get("label") or provider_key)
+                        changed = True
+                    if not item.description:
+                        item.description = str(template.get("description") or "")
+                        changed = True
+                    if not item.driver_type:
+                        item.driver_type = driver_type
+                        changed = True
+                    if not item.default_auth_mode:
+                        item.default_auth_mode = str(template.get("default_auth_mode") or "")
+                        changed = True
+                    if is_new or item.is_builtin:
+                        next_auth_modes = list(template.get("auth_modes") or [])
+                        next_fields = list(template.get("fields") or [])
+                        next_default_auth_mode = str(template.get("default_auth_mode") or "")
+                        if item.driver_type != driver_type:
+                            item.driver_type = driver_type
+                            changed = True
+                        if item.default_auth_mode != next_default_auth_mode:
+                            item.default_auth_mode = next_default_auth_mode
+                            changed = True
+                        if item.get_auth_modes() != next_auth_modes:
+                            item.set_auth_modes(next_auth_modes)
+                            changed = True
+                        if item.get_fields() != next_fields:
+                            item.set_fields(next_fields)
+                            changed = True
+                    elif not item.get_auth_modes():
+                        item.set_auth_modes(list(template.get("auth_modes") or []))
+                        changed = True
+                    if not item.get_fields():
+                        item.set_fields(list(template.get("fields") or []))
+                        changed = True
+                    if not item.get_metadata():
+                        item.set_metadata(dict(template.get("metadata") or {}))
+                        changed = True
+                    if not item.is_builtin:
+                        item.is_builtin = True
+                        changed = True
+                    item.updated_at = _utcnow()
+                    session.add(item)
             if changed:
                 session.commit()
 
@@ -114,10 +142,12 @@ class ProviderDefinitionsRepository:
             item.label = label or provider_key
             item.description = description or ""
             item.driver_type = driver_type
-            item.default_auth_mode = default_auth_mode or str(template.get("default_auth_mode") or "")
+            item.default_auth_mode = default_auth_mode or item.default_auth_mode or str(template.get("default_auth_mode") or "")
             item.enabled = bool(enabled)
-            item.set_auth_modes(list(template.get("auth_modes") or []))
-            item.set_fields(list(template.get("fields") or []))
+            if not item.get_auth_modes():
+                item.set_auth_modes(list(template.get("auth_modes") or []))
+            if not item.get_fields():
+                item.set_fields(list(template.get("fields") or []))
             item.set_metadata(dict(metadata or {}))
             item.updated_at = _utcnow()
             session.add(item)
@@ -130,8 +160,6 @@ class ProviderDefinitionsRepository:
             item = session.get(ProviderDefinitionModel, definition_id)
             if not item:
                 return False
-            if item.is_builtin:
-                raise ValueError("内置 provider definition 不允许删除")
             has_settings = session.exec(
                 select(ProviderSettingModel)
                 .where(ProviderSettingModel.provider_type == item.provider_type)

@@ -12,9 +12,6 @@ class ChatGPTPlatform(BasePlatform):
     name = "chatgpt"
     display_name = "ChatGPT"
     version = "1.0.0"
-    supported_executors = ["protocol", "headless", "headed"]
-    supported_identity_modes = ["mailbox", "oauth_browser"]
-    supported_oauth_providers = ["google", "microsoft", "apple"]
 
     def __init__(self, config: RegisterConfig = None, mailbox: BaseMailbox = None):
         super().__init__(config)
@@ -102,7 +99,7 @@ class ChatGPTPlatform(BasePlatform):
             return ChatGPTProtocolMailboxWorker(
                 mailbox=self.mailbox,
                 mailbox_account=ctx.identity.mailbox_account,
-                provider=(self.config.extra or {}).get("mail_provider", "tempmail_lol"),
+                provider=(self.config.extra or {}).get("mail_provider", ""),
                 proxy_url=ctx.proxy,
                 log_fn=ctx.log,
             )

@@ -495,8 +495,12 @@ def _build_platform_instance(platform_name: str, payload: dict[str, Any], logger
     identity_provider = normalize_identity_provider(extra.get("identity_provider", "mailbox"))
     mailbox = None
     if identity_provider == "mailbox":
+        if not extra.get("mail_provider"):
+            from infrastructure.provider_settings_repository import ProviderSettingsRepository
+
+            extra["mail_provider"] = ProviderSettingsRepository().get_default_provider_key("mailbox")
         mailbox = create_mailbox(
-            provider=extra.get("mail_provider", "moemail"),
+            provider=extra.get("mail_provider", ""),
             extra=extra,
             proxy=resolved_proxy,
         )

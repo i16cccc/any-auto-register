@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from core.provider_drivers import CAPTCHA_POLICY
 from infrastructure.provider_definitions_repository import ProviderDefinitionsRepository
 from infrastructure.provider_settings_repository import ProviderSettingsRepository
 
@@ -43,9 +42,13 @@ class ProviderSettingsService:
         }
 
     def get_captcha_policy(self) -> dict:
-        policy = dict(CAPTCHA_POLICY)
-        policy["protocol_order"] = self.repository.get_enabled_captcha_order(policy.get("protocol_order") or [])
-        return policy
+        browser_default = self.repository.get_default_provider_key("captcha")
+        protocol_order = self.repository.get_enabled_captcha_order()
+        return {
+            "protocol_mode": "auto_first_enabled_remote",
+            "protocol_order": protocol_order,
+            "browser_mode": browser_default,
+        }
 
     def _serialize(self, item) -> dict:
         definition = self.definitions.get_by_key(item.provider_type, item.provider_key)

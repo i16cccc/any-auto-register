@@ -1,16 +1,14 @@
 import { useEffect, useState } from 'react'
 import { getConfig, getConfigOptions, getPlatforms, invalidateConfigCache, invalidateConfigOptionsCache, invalidatePlatformsCache } from '@/lib/app-data'
-import type { ConfigOptionsResponse, ProviderDriver, ProviderOption, ProviderSetting } from '@/lib/config-options'
+import type { ChoiceOption, ConfigOptionsResponse, ProviderDriver, ProviderOption, ProviderSetting } from '@/lib/config-options'
 import { getCaptchaStrategyLabel } from '@/lib/config-options'
 import { apiFetch } from '@/lib/utils'
-import { ALL_OAUTH_PROVIDERS, getIdentityModeLabel, getOAuthProviderLabel } from '@/lib/registration'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { Save, Eye, EyeOff, Mail, Shield, Cpu, RefreshCw, CheckCircle, XCircle, Sliders, Plus, X, Orbit, Package2, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-const ALL_IDENTITY_MODES = ['mailbox', 'oauth_browser']
 type ProviderType = 'mailbox' | 'captcha'
 
 function SettingsMetric({
@@ -49,6 +47,7 @@ function PlatformCapsTab() {
       const init: Record<string, any> = {}
       list.forEach(p => {
         init[p.name] = {
+          supported_executors: [...p.supported_executors],
           supported_identity_modes: [...p.supported_identity_modes],
           supported_oauth_providers: [...p.supported_oauth_providers],
         }
@@ -81,15 +80,26 @@ function PlatformCapsTab() {
     invalidatePlatformsCache()
     const list = await getPlatforms({ force: true })
     const p = list.find((x: any) => x.name === name)
-    if (p) setDrafts(d => ({ ...d, [name]: { supported_identity_modes: [...p.supported_identity_modes], supported_oauth_providers: [...p.supported_oauth_providers] } }))
+    if (p) setDrafts(d => ({
+      ...d,
+      [name]: {
+        supported_executors: [...p.supported_executors],
+        supported_identity_modes: [...p.supported_identity_modes],
+        supported_oauth_providers: [...p.supported_oauth_providers],
+      },
+    }))
   }
 
   return (
     <div className="space-y-4">
       {platforms.map(p => {
         const draft = drafts[p.name] || {}
+        const executors: string[] = draft.supported_executors || []
         const modes: string[] = draft.supported_identity_modes || []
         const oauths: string[] = draft.supported_oauth_providers || []
+        const executorOptions: ChoiceOption[] = p.supported_executor_options || []
+        const identityOptions: ChoiceOption[] = p.supported_identity_mode_options || []
+        const oauthOptions: ChoiceOption[] = p.supported_oauth_provider_options || []
         return (
           <div key={p.name} className="rounded-[24px] border border-[var(--border)] bg-[var(--bg-pane)]/56 p-5">
             <div className="flex items-center justify-between mb-4">
@@ -104,14 +114,27 @@ function PlatformCapsTab() {
             </div>
             <div className="space-y-3">
               <div>
+                <p className="text-xs text-[var(--text-muted)] mb-2">执行方式</p>
+                <div className="flex flex-wrap gap-4">
+                  {executorOptions.map(option => (
+                    <label key={option.value} className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)] cursor-pointer">
+                      <input type="checkbox" checked={executors.includes(option.value)}
+                        onChange={() => toggle(p.name, 'supported_executors', option.value)}
+                        className="checkbox-accent" />
+                      {option.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div>
                 <p className="text-xs text-[var(--text-muted)] mb-2">注册身份</p>
                 <div className="flex gap-4">
-                  {ALL_IDENTITY_MODES.map(m => (
-                    <label key={m} className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)] cursor-pointer">
-                      <input type="checkbox" checked={modes.includes(m)}
-                        onChange={() => toggle(p.name, 'supported_identity_modes', m)}
+                  {identityOptions.map(option => (
+                    <label key={option.value} className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)] cursor-pointer">
+                      <input type="checkbox" checked={modes.includes(option.value)}
+                        onChange={() => toggle(p.name, 'supported_identity_modes', option.value)}
                         className="checkbox-accent" />
-                      {getIdentityModeLabel(m)}
+                      {option.label}
                     </label>
                   ))}
                 </div>
@@ -119,12 +142,12 @@ function PlatformCapsTab() {
               <div>
                 <p className="text-xs text-[var(--text-muted)] mb-2">第三方入口</p>
                 <div className="flex flex-wrap gap-4">
-                  {ALL_OAUTH_PROVIDERS.map(o => (
-                    <label key={o.value} className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)] cursor-pointer">
-                      <input type="checkbox" checked={oauths.includes(o.value)}
-                        onChange={() => toggle(p.name, 'supported_oauth_providers', o.value)}
+                  {oauthOptions.map(option => (
+                    <label key={option.value} className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)] cursor-pointer">
+                      <input type="checkbox" checked={oauths.includes(option.value)}
+                        onChange={() => toggle(p.name, 'supported_oauth_providers', option.value)}
                         className="checkbox-accent" />
-                      {getOAuthProviderLabel(o.value)}
+                      {option.label}
                     </label>
                   ))}
                 </div>
@@ -141,28 +164,6 @@ function PlatformCapsTab() {
       })}
     </div>
   )
-}
-
-const SELECT_FIELDS: Record<string, { label: string; value: string }[]> = {
-  default_executor: [
-    { label: '协议模式', value: 'protocol' },
-    { label: '后台浏览器自动', value: 'headless' },
-    { label: '可视浏览器自动', value: 'headed' },
-  ],
-  default_identity_provider: [
-    { label: '系统邮箱', value: 'mailbox' },
-    { label: '第三方账号', value: 'oauth_browser' },
-  ],
-  default_oauth_provider: [
-    { label: '不预选，由当前页面选择', value: '' },
-    { label: 'GitHub', value: 'github' },
-    { label: 'Google', value: 'google' },
-    { label: 'Microsoft', value: 'microsoft' },
-    { label: 'LinkedIn', value: 'linkedin' },
-    { label: 'Apple', value: 'apple' },
-    { label: 'X', value: 'x' },
-    { label: 'Builder ID', value: 'builderid' },
-  ],
 }
 
 const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
@@ -218,9 +219,11 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
   },
 ]
 
-function Field({ field, form, setForm, showSecret, setShowSecret }: any) {
+function Field({ field, form, setForm, showSecret, setShowSecret, selectOptions }: any) {
   const { key, label, placeholder, secret } = field
-  const options = field.options || SELECT_FIELDS[key]
+  const options = (field.options && field.options.length > 0)
+    ? field.options
+    : ((selectOptions && selectOptions.length > 0) ? selectOptions : null)
   return (
     <div className="grid grid-cols-3 gap-4 items-center py-3 border-b border-white/5 last:border-0">
       <label className="text-sm text-[var(--text-secondary)] font-medium">{label}</label>
@@ -552,7 +555,16 @@ function CreateProviderDefinitionModal({
 export default function Settings() {
   const [activeTab, setActiveTab] = useState('register')
   const [form, setForm] = useState<Record<string, string>>({})
-  const [configOptions, setConfigOptions] = useState<ConfigOptionsResponse>({ mailbox_providers: [], captcha_providers: [], mailbox_drivers: [], captcha_drivers: [], captcha_policy: {} })
+  const [configOptions, setConfigOptions] = useState<ConfigOptionsResponse>({
+    mailbox_providers: [],
+    captcha_providers: [],
+    mailbox_drivers: [],
+    captcha_drivers: [],
+    captcha_policy: {},
+    executor_options: [],
+    identity_mode_options: [],
+    oauth_provider_options: [],
+  })
   const [providerSettings, setProviderSettings] = useState<{ mailbox: ProviderSetting[]; captcha: ProviderSetting[] }>({ mailbox: [], captcha: [] })
   const [newProviderKey, setNewProviderKey] = useState<{ mailbox: string; captcha: string }>({ mailbox: '', captcha: '' })
   const [providerDialog, setProviderDialog] = useState<{ providerType: ProviderType | null; providerKey: string; readOnly: boolean }>({ providerType: null, providerKey: '', readOnly: false })
@@ -591,7 +603,16 @@ export default function Settings() {
       })
       setOptionsError('')
     } else {
-      setConfigOptions({ mailbox_providers: [], captcha_providers: [], mailbox_drivers: [], captcha_drivers: [], captcha_policy: {} })
+      setConfigOptions({
+        mailbox_providers: [],
+        captcha_providers: [],
+        mailbox_drivers: [],
+        captcha_drivers: [],
+        captcha_policy: {},
+        executor_options: [],
+        identity_mode_options: [],
+        oauth_provider_options: [],
+      })
       setProviderSettings({ mailbox: [], captcha: [] })
       setOptionsError('未加载到 provider 元数据。请重启后端后刷新页面。')
     }
@@ -623,6 +644,17 @@ export default function Settings() {
 
   const tab = TABS.find(t => t.id === activeTab) ?? TABS[0]
   const sections = tab.sections ?? []
+  const getSelectOptions = (key: string) => {
+    if (key === 'default_executor') return configOptions.executor_options || []
+    if (key === 'default_identity_provider') return configOptions.identity_mode_options || []
+    if (key === 'default_oauth_provider') {
+      return [
+        { label: '不预选，由当前页面选择', value: '' },
+        ...((configOptions.oauth_provider_options || []).filter(option => option.value !== '')),
+      ]
+    }
+    return []
+  }
   const mailboxCatalog = configOptions.mailbox_providers || []
   const captchaCatalog = configOptions.captcha_providers || []
   const mailboxDrivers = configOptions.mailbox_drivers || []
@@ -1086,7 +1118,7 @@ export default function Settings() {
                     </div>
                   )}
                   <div className="rounded-[22px] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-[var(--text-secondary)]">
-                    协议模式会按后端策略自动选择第一个已配置好的远程打码服务；浏览器模式固定走本地 Solver。列表行内可以直接查看详情、编辑、设默认、删除。
+                    协议模式会按已启用顺序自动选择远程打码服务；浏览器模式使用当前默认的验证码 provider。列表行内可以直接查看详情、编辑、设默认、删除。
                   </div>
                   <div className="rounded-[24px] border border-[var(--border)] bg-[var(--bg-pane)]/56 p-5">
                     <div className="mb-2">
@@ -1183,7 +1215,8 @@ export default function Settings() {
                   </div>
                   {items.map((field: any) => (
                     <Field key={field.key} field={field} form={form} setForm={setForm}
-                      showSecret={showSecret} setShowSecret={setShowSecret} />
+                      showSecret={showSecret} setShowSecret={setShowSecret}
+                      selectOptions={getSelectOptions(field.key)} />
                   ))}
                 </div>
               ))}

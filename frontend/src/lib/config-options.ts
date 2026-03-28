@@ -1,3 +1,8 @@
+export type ChoiceOption = {
+  value: string
+  label: string
+}
+
 export type ProviderField = {
   key: string
   label: string
@@ -42,6 +47,9 @@ export type ConfigOptionsResponse = {
   mailbox_settings?: ProviderSetting[]
   captcha_settings?: ProviderSetting[]
   captcha_policy?: CaptchaPolicy
+  executor_options?: ChoiceOption[]
+  identity_mode_options?: ChoiceOption[]
+  oauth_provider_options?: ChoiceOption[]
 }
 
 export type ProviderSetting = {
@@ -81,11 +89,14 @@ export function listProviderFieldKeys(providers: ProviderOption[] = []): string[
 
 export function getCaptchaStrategyLabel(executorType: string, policy?: CaptchaPolicy, providers?: ProviderOption[]) {
   if (executorType === 'headless' || executorType === 'headed') {
-    const browserDefault = policy?.browser_mode || 'local_solver'
-    const label = providers?.find(item => item.value === browserDefault)?.label || '本地 Solver (Camoufox)'
-    return `浏览器模式自动使用 ${label}`
+    const browserDefault = policy?.browser_mode || ''
+    const label = providers?.find(item => item.value === browserDefault)?.label || browserDefault
+    return label ? `浏览器模式默认使用 ${label}` : '浏览器模式未配置默认验证码 provider'
   }
-  const order = policy?.protocol_order || ['yescaptcha', '2captcha']
+  const order = policy?.protocol_order || []
+  if (order.length === 0) {
+    return '协议模式未配置可用的远程验证码 provider'
+  }
   const labels = order.map(value => providers?.find(item => item.value === value)?.label || value)
-  return `协议模式按顺序自动选择远程打码服务：${labels.join(' -> ')}`
+  return `协议模式按已启用顺序自动选择远程打码服务：${labels.join(' -> ')}`
 }

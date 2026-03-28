@@ -11,9 +11,6 @@ class TavilyPlatform(BasePlatform):
     name = "tavily"
     display_name = "Tavily"
     version = "1.0.0"
-    supported_executors = ["protocol", "headless", "headed"]
-    supported_identity_modes = ["mailbox", "oauth_browser"]
-    supported_oauth_providers = ["google", "github", "linkedin", "microsoft"]
 
     def __init__(self, config: RegisterConfig = None, mailbox: BaseMailbox = None):
         super().__init__(config)
@@ -36,7 +33,13 @@ class TavilyPlatform(BasePlatform):
         )
 
     def _browser_preflight(self, ctx) -> None:
-        if ctx.identity.identity_provider == "mailbox" and ctx.platform._resolve_captcha_solver() == "local_solver":
+        if ctx.identity.identity_provider != "mailbox":
+            return
+        solver_key = ctx.platform._resolve_captcha_solver()
+        from infrastructure.provider_definitions_repository import ProviderDefinitionsRepository
+
+        definition = ProviderDefinitionsRepository().get_by_key("captcha", solver_key)
+        if definition and definition.driver_type == "local_solver":
             from services.solver_manager import start
 
             start()

@@ -36,7 +36,7 @@ class Account:
 class RegisterConfig:
     """注册任务配置"""
     executor_type: str = "protocol"   # protocol | headless | headed
-    captcha_solver: str = "auto"  # auto | yescaptcha | 2captcha | local_solver | manual
+    captcha_solver: str = "auto"  # auto | <provider_key> | manual
     proxy: Optional[str] = None
     extra: dict = field(default_factory=dict)
 
@@ -46,15 +46,21 @@ class BasePlatform(ABC):
     name: str = ""
     display_name: str = ""
     version: str = "1.0.0"
-    # 子类声明支持的执行器类型，未列出的自动降级到 protocol
-    supported_executors: list = ["protocol", "headless", "headed"]
-    supported_identity_modes: list = ["mailbox"]
+    # 平台能力由数据库表提供；类上不再保留业务配置默认值。
+    supported_executors: list = []
+    supported_identity_modes: list = []
     supported_oauth_providers: list = []
-    protocol_captcha_order: tuple[str, ...] = ("yescaptcha", "2captcha")
+    protocol_captcha_order: tuple[str, ...] = ()
 
     def __init__(self, config: RegisterConfig = None):
+        from core.registry import get_platform_capabilities
+
         self.config = config or RegisterConfig()
         self._log_fn = print
+        capabilities = get_platform_capabilities(self.name) if self.name else {}
+        self.supported_executors = list(capabilities.get("supported_executors", [])) or list(self.supported_executors)
+        self.supported_identity_modes = list(capabilities.get("supported_identity_modes", [])) or list(self.supported_identity_modes)
+        self.supported_oauth_providers = list(capabilities.get("supported_oauth_providers", [])) or list(self.supported_oauth_providers)
         if self.config.executor_type not in self.supported_executors:
             raise NotImplementedError(
                 f"{self.display_name} 暂不支持 '{self.config.executor_type}' 执行器，"
@@ -211,13 +217,21 @@ class BasePlatform(ABC):
             return requested
 
         if self.config.executor_type in {"headless", "headed"}:
-            return "local_solver"
+            try:
+                from infrastructure.provider_settings_repository import ProviderSettingsRepository
 
-        protocol_order = list(self.protocol_captcha_order)
+                browser_key = ProviderSettingsRepository().get_default_provider_key("captcha")
+                if browser_key and self._has_configured_captcha(browser_key):
+                    return browser_key
+            except Exception:
+                pass
+            raise RuntimeError("浏览器模式未配置默认验证码 provider，请先在设置页启用并设为默认")
+
+        protocol_order = []
         try:
             from infrastructure.provider_settings_repository import ProviderSettingsRepository
 
-            protocol_order = ProviderSettingsRepository().get_enabled_captcha_order(protocol_order)
+            protocol_order = ProviderSettingsRepository().get_enabled_captcha_order()
         except Exception:
             protocol_order = list(self.protocol_captcha_order)
 

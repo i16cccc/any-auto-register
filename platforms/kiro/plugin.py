@@ -29,9 +29,6 @@ class KiroPlatform(BasePlatform):
     name = "kiro"
     display_name = "Kiro (AWS Builder ID)"
     version = "1.0.0"
-    supported_executors = ["protocol", "headless", "headed"]
-    supported_identity_modes = ["mailbox", "oauth_browser"]
-    supported_oauth_providers = ["google", "github", "builderid"]
 
     def __init__(self, config: RegisterConfig = None, mailbox: BaseMailbox = None):
         super().__init__(config)
@@ -107,7 +104,7 @@ class KiroPlatform(BasePlatform):
                 email=ctx.identity.email,
                 password=ctx.password,
                 name=ctx.extra.get("name", "Kiro User"),
-                mail_token=ctx.extra.get("laoudo_account_id", "") or None,
+                mail_token=getattr(ctx.identity.mailbox_account, "account_id", "") or None,
                 otp_timeout=resolve_timeout(ctx.extra, ("otp_timeout",), 120),
                 otp_callback=artifacts.otp_callback,
             )

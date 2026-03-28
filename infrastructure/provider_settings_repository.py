@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 
 from sqlmodel import Session, select
 
-from core.config_store import config_store
 from core.db import ProviderSettingModel, engine
 from infrastructure.provider_definitions_repository import ProviderDefinitionsRepository
 
@@ -18,7 +17,6 @@ class ProviderSettingsRepository:
         self.definitions = definitions or ProviderDefinitionsRepository()
 
     def list_by_type(self, provider_type: str) -> list[ProviderSettingModel]:
-        self._ensure_seeded(provider_type)
         with Session(engine) as session:
             return session.exec(
                 select(ProviderSettingModel)
@@ -31,7 +29,6 @@ class ProviderSettingsRepository:
             return session.get(ProviderSettingModel, setting_id)
 
     def get_by_key(self, provider_type: str, provider_key: str) -> ProviderSettingModel | None:
-        self._ensure_seeded(provider_type)
         with Session(engine) as session:
             return session.exec(
                 select(ProviderSettingModel)
@@ -40,8 +37,17 @@ class ProviderSettingsRepository:
             ).first()
 
     def resolve_runtime_settings(self, provider_type: str, provider_key: str, overrides: dict | None = None) -> dict:
+        definition = self.definitions.get_by_key(provider_type, provider_key)
         item = self.get_by_key(provider_type, provider_key)
         payload: dict = {}
+        if definition:
+            for field in definition.get_fields():
+                field_key = str(field.get("key") or "").strip()
+                if not field_key:
+                    continue
+                default_value = field.get("default_value")
+                if default_value not in (None, ""):
+                    payload[field_key] = default_value
         if item:
             payload.update(item.get_config())
             payload.update(item.get_auth())
@@ -49,7 +55,6 @@ class ProviderSettingsRepository:
         return payload
 
     def list_enabled(self, provider_type: str) -> list[ProviderSettingModel]:
-        self._ensure_seeded(provider_type)
         with Session(engine) as session:
             items = session.exec(
                 select(ProviderSettingModel)
@@ -59,19 +64,23 @@ class ProviderSettingsRepository:
             ).all()
         return sorted(items, key=lambda item: (not bool(item.is_default), int(item.id or 0)))
 
-    def get_enabled_captcha_order(self, fallback_order: list[str] | tuple[str, ...] | None = None) -> list[str]:
+    def get_enabled_captcha_order(self) -> list[str]:
         configured = [
             item.provider_key
             for item in self.list_enabled("captcha")
             if item.provider_key not in {"", "manual", "local_solver"}
         ]
         merged: list[str] = []
-        for key in configured + list(fallback_order or []):
+        for key in configured:
             normalized = str(key or "").strip()
             if not normalized or normalized in {"manual", "local_solver"} or normalized in merged:
                 continue
             merged.append(normalized)
         return merged
+
+    def get_default_provider_key(self, provider_type: str, *, enabled_only: bool = True) -> str:
+        items = self.list_enabled(provider_type) if enabled_only else self.list_by_type(provider_type)
+        return str(items[0].provider_key or "") if items else ""
 
     def delete(self, setting_id: int) -> bool:
         with Session(engine) as session:
@@ -154,82 +163,4 @@ class ProviderSettingsRepository:
             session.commit()
             session.refresh(item)
 
-        self._sync_legacy_config(provider_type, item)
         return item
-
-    def _ensure_seeded(self, provider_type: str) -> None:
-        definitions = self.definitions.list_by_type(provider_type, enabled_only=True)
-        if not definitions:
-            return
-
-        legacy_all = config_store.get_all()
-        default_key = ""
-        if provider_type == "mailbox":
-            default_key = legacy_all.get("mail_provider", "")
-        elif provider_type == "captcha":
-            default_key = legacy_all.get("default_captcha_solver", "")
-
-        with Session(engine) as session:
-            existing_items = session.exec(
-                select(ProviderSettingModel).where(ProviderSettingModel.provider_type == provider_type)
-            ).all()
-            if existing_items:
-                return
-            existing = {item.provider_key: item for item in existing_items}
-            changed = False
-            for definition in definitions:
-                provider_key = str(definition.provider_key or "")
-                if not provider_key or provider_key in existing:
-                    continue
-                config, auth = self._extract_legacy_payload(definition, legacy_all)
-                item = ProviderSettingModel(
-                    provider_type=provider_type,
-                    provider_key=provider_key,
-                    display_name=definition.label or provider_key,
-                    auth_mode=definition.default_auth_mode or "",
-                    enabled=True,
-                    is_default=(provider_key == default_key),
-                )
-                item.set_config(config)
-                item.set_auth(auth)
-                item.set_metadata({})
-                session.add(item)
-                changed = True
-            if changed:
-                session.commit()
-
-    def _extract_legacy_payload(self, definition, legacy_all: dict[str, str]) -> tuple[dict, dict]:
-        config: dict[str, str] = {}
-        auth: dict[str, str] = {}
-        for field in definition.get_fields():
-            key = str(field.get("key") or "")
-            if not key:
-                continue
-            value = str(legacy_all.get(key, "") or "")
-            if not value:
-                continue
-            target = auth if field.get("category") == "auth" else config
-            target[key] = value
-        return config, auth
-
-    def _sync_legacy_config(self, provider_type: str, item: ProviderSettingModel) -> None:
-        definition = self.definitions.get_by_key(provider_type, item.provider_key)
-        if not definition:
-            return
-        flat: dict[str, str] = {}
-        merged = {}
-        merged.update(item.get_config())
-        merged.update(item.get_auth())
-        for field in definition.get_fields():
-            key = str(field.get("key") or "")
-            if not key:
-                continue
-            flat[key] = str(merged.get(key, "") or "")
-
-        if provider_type == "mailbox" and item.is_default:
-            flat["mail_provider"] = item.provider_key
-        if provider_type == "captcha" and item.is_default:
-            flat["default_captcha_solver"] = item.provider_key
-
-        if flat:
-            config_store.set_many(flat)

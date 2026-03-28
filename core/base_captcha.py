@@ -109,7 +109,7 @@ class ManualCaptcha(BaseCaptcha):
 class LocalSolverCaptcha(BaseCaptcha):
     """调用本地 api_solver 服务解 Turnstile（Camoufox/patchright）"""
 
-    def __init__(self, solver_url: str = "http://localhost:8889"):
+    def __init__(self, solver_url: str = ""):
         self.solver_url = solver_url.rstrip("/")
 
     def solve_turnstile(self, page_url: str, site_key: str) -> str:
@@ -189,7 +189,7 @@ def has_captcha_configured(provider_key: str, extra: dict | None = None) -> bool
     from infrastructure.provider_settings_repository import ProviderSettingsRepository
 
     key = str(provider_key or "").strip()
-    if key in {"manual", "local_solver"}:
+    if key == "manual":
         return True
 
     definition = ProviderDefinitionsRepository().get_by_key("captcha", key)
@@ -212,11 +212,13 @@ def create_captcha_solver(provider_key: str, extra: dict | None = None) -> BaseC
         return ManualCaptcha()
 
     definition = ProviderDefinitionsRepository().get_by_key("captcha", key)
+    if not definition or not definition.enabled:
+        raise RuntimeError(f"验证码 provider 不存在或未启用: {key}")
     merged = ProviderSettingsRepository().resolve_runtime_settings("captcha", key, extra or {})
     driver_type = (definition.driver_type if definition else key).lower()
 
     if driver_type == "local_solver":
-        return LocalSolverCaptcha(merged.get("solver_url", "") or "http://localhost:8889")
+        return LocalSolverCaptcha(str(merged.get("solver_url", "") or ""))
     if driver_type == "yescaptcha_api":
         client_key = str(merged.get("yescaptcha_key", "") or "")
         if not client_key:
