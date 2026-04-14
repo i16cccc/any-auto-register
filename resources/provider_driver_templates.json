@@ -34,6 +34,20 @@
     },
     {
       "provider_type": "mailbox",
+      "provider_key": "tempmail_web",
+      "driver_type": "tempmail_web_api",
+      "label": "Temp-Mail Web",
+      "description": "参考项目同款 web2.temp-mail.org 邮箱源。",
+      "default_auth_mode": "anonymous",
+      "auth_modes": [
+        { "value": "anonymous", "label": "匿名访问" }
+      ],
+      "fields": [
+        { "key": "tempmail_web_base_url", "label": "Base URL", "placeholder": "https://web2.temp-mail.org", "default_value": "https://web2.temp-mail.org", "category": "connection" }
+      ]
+    },
+    {
+      "provider_type": "mailbox",
       "provider_key": "duckmail",
       "driver_type": "duckmail_api",
       "label": "DuckMail API",

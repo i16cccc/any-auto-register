@@ -16,7 +16,44 @@ class ProviderSettingsRepository:
     def __init__(self, definitions: ProviderDefinitionsRepository | None = None):
         self.definitions = definitions or ProviderDefinitionsRepository()
 
+    def _ensure_builtin_settings(self, provider_type: str) -> None:
+        self.definitions.ensure_seeded()
+        with Session(engine) as session:
+            definitions = {
+                str(item.provider_key or ""): item
+                for item in self.definitions.list_by_type(provider_type, enabled_only=False)
+            }
+            existing = {
+                str(item.provider_key or ""): item
+                for item in session.exec(
+                    select(ProviderSettingModel)
+                    .where(ProviderSettingModel.provider_type == provider_type)
+                ).all()
+            }
+            changed = False
+            for provider_key, definition in definitions.items():
+                if not provider_key or provider_key in existing:
+                    continue
+                item = ProviderSettingModel(
+                    provider_type=provider_type,
+                    provider_key=provider_key,
+                )
+                item.display_name = definition.label or provider_key
+                item.auth_mode = definition.default_auth_mode or ""
+                item.enabled = True
+                item.is_default = False
+                item.set_config({})
+                item.set_auth({})
+                item.set_metadata({})
+                item.created_at = _utcnow()
+                item.updated_at = _utcnow()
+                session.add(item)
+                changed = True
+            if changed:
+                session.commit()
+
     def list_by_type(self, provider_type: str) -> list[ProviderSettingModel]:
+        self._ensure_builtin_settings(provider_type)
         with Session(engine) as session:
             return session.exec(
                 select(ProviderSettingModel)
@@ -55,6 +92,7 @@ class ProviderSettingsRepository:
         return payload
 
     def list_enabled(self, provider_type: str) -> list[ProviderSettingModel]:
+        self._ensure_builtin_settings(provider_type)
         with Session(engine) as session:
             items = session.exec(
                 select(ProviderSettingModel)

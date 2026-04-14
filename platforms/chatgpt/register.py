@@ -82,6 +82,15 @@ class SignupFormResult:
     error_message: str = ""
 
 
+@dataclass
+class SentinelPayload:
+    """Sentinel 请求结果。"""
+    p: str
+    c: str
+    flow: str
+    t: str = ""
+
+
 class RegistrationEngine:
     """
     注册引擎
@@ -133,6 +142,10 @@ class RegistrationEngine:
         self.logs: list = []
         self._otp_sent_at: Optional[float] = None  # OTP 发送时间戳
         self._is_existing_account: bool = False  # 是否为已注册账号（用于自动登录）
+        self._device_id: Optional[str] = None
+        self._sentinel_token: Optional[str] = None
+        self._signup_sentinel: Optional[SentinelPayload] = None
+        self._password_sentinel: Optional[SentinelPayload] = None
 
     def _log(self, message: str, level: str = "info"):
         """记录日志"""
@@ -164,7 +177,34 @@ class RegistrationEngine:
 
     def _generate_password(self, length: int = DEFAULT_PASSWORD_LENGTH) -> str:
         """生成随机密码"""
-        return ''.join(secrets.choice(PASSWORD_CHARSET) for _ in range(length))
+        # OpenAI 注册页对纯字母数字密码存在更高概率拒绝，补一个符号位更稳。
+        specials = ",._!@#"
+        if length < 10:
+            length = 10
+        core = ''.join(secrets.choice(PASSWORD_CHARSET) for _ in range(length - 2))
+        return (
+            secrets.choice("abcdefghijklmnopqrstuvwxyz")
+            + secrets.choice("0123456789")
+            + secrets.choice(specials)
+            + core
+        )[:length]
+
+    def _load_create_account_password_page(self) -> bool:
+        """预加载 create-account/password 页面，拿到页面阶段 cookie。"""
+        try:
+            response = self.session.get(
+                "https://auth.openai.com/create-account/password",
+                headers={
+                    "referer": "https://chatgpt.com/",
+                    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                },
+                timeout=20,
+            )
+            self._log(f"加载密码页状态: {response.status_code}")
+            return response.status_code == 200
+        except Exception as e:
+            self._log(f"加载密码页失败: {e}", "warning")
+            return False
 
     def _check_ip_location(self) -> Tuple[bool, Optional[str]]:
         """检查 IP 地理位置"""
@@ -230,10 +270,21 @@ class RegistrationEngine:
             self._log(f"获取 Device ID 失败: {e}", "error")
             return None
 
-    def _check_sentinel(self, did: str) -> Optional[str]:
+    def _check_sentinel(self, did: str, *, flow: str = "authorize_continue") -> Optional[SentinelPayload]:
         """检查 Sentinel 拦截"""
         try:
-            sen_req_body = f'{{"p":"","id":"{did}","flow":"authorize_continue"}}'
+            sent_p = ""
+            if flow == "username_password_create":
+                sent_p = (
+                    "gAAAAACWzMwMDAsIlN1biBBcHIgMDUgMjAyNiAxNDowMzowMiBHTVQrMDgwMCAo5Lit5Zu95qCH5YeG5pe26Ze0KSIs"
+                    "NDI5NDk2NzI5Niw1LCJNb3ppbGxhLzUuMCAoTWFjaW50b3NoOyBJbnRlbCBNYWMgT1MgWCAxMF8xNV83KSBBcHBsZVdl"
+                    "YktpdC81MzcuMzYgKEtIVE1MLCBsaWtlIEdlY2tvKSBDaHJvbWUvMTQ2LjAuMC4wIFNhZmFyaS81MzcuMzYiLCJodHRw"
+                    "czovL3NlbnRpbmVsLm9wZW5haS5jb20vYmFja2VuZC1hcGkvc2VudGluZWwvc2RrLmpzIixudWxsLCJ6aC1DTiIsInpo"
+                    "LUNOLHpoIiw0LCJ3ZWJraXRUZW1wb3JhcnlTdG9yYWdl4oiSW29iamVjdCBEZXByZWNhdGVkU3RvcmFnZVF1b3RhXSIs"
+                    "Il9yZWFjdExpc3RlbmluZ3dvMnk1YXV0eG1uIiwib25zY3JvbGxlbmQiLDIzOTQuNSwiYTY4OTQ0ZWYtZjI2Yi00MTc4"
+                    "LWEwNTItZjE0NGZjOTYwMzgxIiwiIiwyLDE3NzUzNjg5Nzk2NjQuNiwwLDAsMCwwLDAsMCwwXQ==~S"
+                )
+            sen_req_body = json.dumps({"p": sent_p, "id": did, "flow": flow}, separators=(",", ":"))
 
             response = self.http_client.post(
                 OPENAI_API_ENDPOINTS["sentinel"],
@@ -246,18 +297,26 @@ class RegistrationEngine:
             )
 
             if response.status_code == 200:
-                sen_token = response.json().get("token")
-                self._log(f"Sentinel token 获取成功")
-                return sen_token
+                data = response.json()
+                sen_token = str(data.get("token") or "")
+                turnstile = data.get("turnstile") or {}
+                payload = SentinelPayload(
+                    p=sent_p,
+                    c=sen_token,
+                    flow=flow,
+                    t=str(turnstile.get("dx") or ""),
+                )
+                self._log(f"Sentinel token 获取成功: flow={flow}")
+                return payload
             else:
-                self._log(f"Sentinel 检查失败: {response.status_code}", "warning")
+                self._log(f"Sentinel 检查失败: flow={flow} status={response.status_code}", "warning")
                 return None
 
         except Exception as e:
-            self._log(f"Sentinel 检查异常: {e}", "warning")
+            self._log(f"Sentinel 检查异常: flow={flow} {e}", "warning")
             return None
 
-    def _submit_signup_form(self, did: str, sen_token: Optional[str]) -> SignupFormResult:
+    def _submit_signup_form(self, did: str, sen_payload: Optional[SentinelPayload]) -> SignupFormResult:
         """
         提交注册表单
 
@@ -265,6 +324,9 @@ class RegistrationEngine:
             SignupFormResult: 提交结果，包含账号状态判断
         """
         try:
+            self._device_id = did
+            self._signup_sentinel = sen_payload
+            self._sentinel_token = sen_payload.c if sen_payload else None
             signup_body = f'{{"username":{{"value":"{self.email}","kind":"email"}},"screen_hint":"signup"}}'
 
             headers = {
@@ -273,8 +335,14 @@ class RegistrationEngine:
                 "content-type": "application/json",
             }
 
-            if sen_token:
-                sentinel = f'{{"p": "", "t": "", "c": "{sen_token}", "id": "{did}", "flow": "authorize_continue"}}'
+            if sen_payload:
+                sentinel = json.dumps({
+                    "p": sen_payload.p,
+                    "t": sen_payload.t,
+                    "c": sen_payload.c,
+                    "id": did,
+                    "flow": sen_payload.flow,
+                }, separators=(",", ":"))
                 headers["openai-sentinel-token"] = sentinel
 
             response = self.session.post(
@@ -323,50 +391,78 @@ class RegistrationEngine:
     def _register_password(self) -> Tuple[bool, Optional[str]]:
         """注册密码"""
         try:
-            # 生成密码
-            password = self._generate_password()
-            self.password = password  # 保存密码到实例变量
-            self._log(f"生成密码: {password}")
+            self._load_create_account_password_page()
+            if self._device_id:
+                self._password_sentinel = self._check_sentinel(self._device_id, flow="username_password_create")
+                if self._password_sentinel:
+                    self._log(
+                        f"密码阶段 Sentinel 已刷新: flow={self._password_sentinel.flow} "
+                        f"turnstile={'yes' if self._password_sentinel.t else 'no'}"
+                    )
 
-            # 提交密码注册
-            register_body = json.dumps({
-                "password": password,
-                "username": self.email
-            })
+            candidates = []
+            while len(candidates) < 3:
+                pwd = self._generate_password()
+                if pwd not in candidates:
+                    candidates.append(pwd)
 
-            response = self.session.post(
-                OPENAI_API_ENDPOINTS["register"],
-                headers={
-                    "referer": "https://auth.openai.com/create-account/password",
-                    "accept": "application/json",
-                    "content-type": "application/json",
-                },
-                data=register_body,
-            )
+            for index, password in enumerate(candidates, start=1):
+                self.password = password
+                self._log(f"生成密码[{index}/{len(candidates)}]: {password}")
 
-            self._log(f"提交密码状态: {response.status_code}")
+                register_body = json.dumps({
+                    "password": password,
+                    "username": self.email
+                })
 
-            if response.status_code != 200:
+                response = self.session.post(
+                    OPENAI_API_ENDPOINTS["register"],
+                    headers={
+                        "origin": "https://auth.openai.com",
+                        "referer": "https://auth.openai.com/create-account/password",
+                        "accept": "application/json",
+                        "content-type": "application/json",
+                        **(
+                            {
+                                "openai-sentinel-token": json.dumps({
+                                    "p": self._password_sentinel.p,
+                                    "t": self._password_sentinel.t,
+                                    "c": self._password_sentinel.c,
+                                    "id": self._device_id,
+                                    "flow": self._password_sentinel.flow,
+                                }, separators=(",", ":"))
+                            }
+                            if self._password_sentinel and self._device_id
+                            else {}
+                        ),
+                    },
+                    data=register_body,
+                )
+
+                self._log(f"提交密码状态[{index}/{len(candidates)}]: {response.status_code}")
+
+                if response.status_code == 200:
+                    return True, password
+
                 error_text = response.text[:500]
-                self._log(f"密码注册失败: {error_text}", "warning")
+                self._log(f"密码注册失败[{index}/{len(candidates)}]: {error_text}", "warning")
 
-                # 解析错误信息，判断是否是邮箱已注册
                 try:
                     error_json = response.json()
                     error_msg = error_json.get("error", {}).get("message", "")
                     error_code = error_json.get("error", {}).get("code", "")
 
-                    # 检测邮箱已注册的情况
                     if "already" in error_msg.lower() or "exists" in error_msg.lower() or error_code == "user_exists":
                         self._log(f"邮箱 {self.email} 可能已在 OpenAI 注册过", "error")
-                        # 标记此邮箱为已注册状态
                         self._mark_email_as_registered()
+                        return False, None
                 except Exception:
                     pass
 
-                return False, None
+                # 400 大概率是密码策略或页面状态问题，重载页面后换密码再试一次。
+                self._load_create_account_password_page()
 
-            return True, password
+            return False, None
 
         except Exception as e:
             self._log(f"密码注册失败: {e}", "error")
@@ -689,15 +785,15 @@ class RegistrationEngine:
 
             # 6. 检查 Sentinel 拦截
             self._log("6. 检查 Sentinel 拦截...")
-            sen_token = self._check_sentinel(did)
-            if sen_token:
+            sen_payload = self._check_sentinel(did)
+            if sen_payload:
                 self._log("Sentinel 检查通过")
             else:
                 self._log("Sentinel 检查失败或未启用", "warning")
 
             # 7. 提交注册表单 + 解析响应判断账号状态
             self._log("7. 提交注册表单...")
-            signup_result = self._submit_signup_form(did, sen_token)
+            signup_result = self._submit_signup_form(did, sen_payload)
             if not signup_result.success:
                 result.error_message = f"提交注册表单失败: {signup_result.error_message}"
                 return result

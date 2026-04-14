@@ -83,7 +83,7 @@ class ChatGPTPlatform(BasePlatform):
             ),
             oauth_runner=self._run_protocol_oauth,
             capability=RegistrationCapability(oauth_headless_requires_browser_reuse=True),
-            otp_spec=OtpSpec(wait_message="等待验证码..."),
+            otp_spec=OtpSpec(wait_message="等待验证码...", timeout=600),
         )
 
     def build_protocol_oauth_adapter(self):
