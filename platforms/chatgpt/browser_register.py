@@ -1,9 +1,4 @@
 """ChatGPT 浏览器注册流程（Camoufox）。"""
-import base64
-import json
-import random
-import re
-import secrets
 import time
 import uuid
 from typing import Callable, Optional
@@ -1906,6 +1901,7 @@ class ChatGPTBrowserRegister:
         launch_opts = {"headless": self.headless}
         if proxy:
             launch_opts["proxy"] = proxy
+            launch_opts["geoip"] = True
 
         with Camoufox(**launch_opts) as browser:
             page = browser.new_page()
@@ -1918,9 +1914,34 @@ class ChatGPTBrowserRegister:
                 self.log,
             )
             self.log(f"注册流程完成: page={final_state.get('page_type') or '-'}")
+            self.log("打开 ChatGPT 注册页")
+            page.goto(f"{CHATGPT_APP}/auth/login", wait_until="networkidle", timeout=30000)
+            time.sleep(2)
+            self.log(f"当前页面: {page.url}")
+
+            # 循环点击登录按钮，直到跳转到 auth.openai.com
+            login_entry_selectors = [
+                'button[data-testid="login-button"]',
+                'a[data-testid="login-button"]',
+                'button:has-text("Log in")',
+                'a:has-text("Log in")',
+            ]
+            max_retries = 5
+            for i in range(max_retries):
+                if "auth.openai.com" in page.url:
+                    self.log(f"[{i+1}] ✓ 已跳转到 auth.openai.com: {page.url}")
+                    break
 
             # 获取 session token 和 cookies
             cookies_dict = _get_cookies(page)
+                self.log(f"[{i+1}/{max_retries}] 点击登录按钮...")
+                login_clicked = _click_first(page, login_entry_selectors, timeout=3)
+                if login_clicked:
+                    self.log(f"[{i+1}] ✓ 点击成功：{login_clicked}")
+
+                time.sleep(2)
+            else:
+                self.log(f"达到最大重试次数 {max_retries}，当前 URL: {page.url}")
 
             # ═══ 通过 Codex CLI OAuth 获取正确的 token ═══
             # 用 session cookies 在协议层完成 OAuth（不需要浏览器交互）
@@ -1956,6 +1977,71 @@ class ChatGPTBrowserRegister:
             access_token_fallback = _wait_for_access_token(page, timeout=15)
             account_id_fallback = ""
             if access_token_fallback:
+            # Password step
+            pwd_sel = _wait_for_any_selector(page, password_selectors, timeout=20)
+            if pwd_sel:
+                self.log(f"已定位密码输入框: {pwd_sel}")
+                page.fill(pwd_sel, password)
+                used_continue = _click_first(page, continue_selectors, timeout=5)
+                if used_continue:
+                    self.log(f"已点击密码页继续按钮: {used_continue}")
+                time.sleep(3)
+
+            # OTP step
+            otp_sel = _wait_for_any_selector(page, otp_selectors, timeout=25)
+            if not otp_sel:
+                self.log("未进入验证码页面，保存调试文件到 /tmp/chatgpt_otp_fail.*")
+                _dump_debug(page, "chatgpt_otp_fail")
+                raise RuntimeError(f"未进入验证码页面: {page.url}")
+
+            if not self.otp_callback:
+                raise RuntimeError("ChatGPT 注册需要邮箱验证码但未提供 otp_callback")
+            self.log("等待 ChatGPT 验证码")
+            code = self.otp_callback()
+            if not code:
+                raise RuntimeError("未获取到验证码")
+            self.log(f"已定位验证码输入框: {otp_sel}")
+            if otp_sel == 'input[maxlength="1"]':
+                try:
+                    page.click(otp_sel)
+                except Exception:
+                    pass
+                for digit in str(code).strip():
+                    page.keyboard.press(digit)
+                    time.sleep(0.1)
+            else:
+                page.fill(otp_sel, code)
+            used_continue = _click_first(page, continue_selectors, timeout=5)
+            if used_continue:
+                self.log(f"已点击验证码页继续按钮: {used_continue}")
+            time.sleep(5)
+
+            # Check for about-you page
+            self.log("等待可能的 Name/Birthday 填写步骤...")
+            for _ in range(15):
+                if "chatgpt.com" in page.url:
+                    break
+                if page.query_selector('input[name="name"]'):
+                    self.log("检测到关于您页面，填写姓名和生日")
+                    _fill_profile(page, self.log)
+                    time.sleep(5)
+                    break
+                time.sleep(1)
+
+            # Wait for chatgpt.com
+            try:
+                page.wait_for_url("**/chatgpt.com**", timeout=45000)
+            except Exception:
+                if not _wait_for_url(page, "chatgpt.com", timeout=15):
+                    self.log("未跳转到应用，保存截图到 /tmp/chatgpt_fail.png")
+                    _dump_debug(page, "chatgpt_fail")
+                    raise RuntimeError(f"ChatGPT 注册后未跳转到应用: {page.url}")
+
+            time.sleep(3)
+            # Find and click Skip if onboarding popup appears
+            skip_btn = 'button:has-text("Skip")'
+            if page.query_selector(skip_btn):
+                self.log("点击 Skip 跳过引导")
                 try:
                     parts = access_token_fallback.split(".")
                     if len(parts) >= 2:
