@@ -1049,14 +1049,33 @@ function ActionMenu({
     setRunning(action.id)
     setActionTaskStatus(null)
     apiFetch(`/actions/${acc.platform}/${acc.id}/${action.id}`, { method: 'POST', body: JSON.stringify({ params }) })
-      .then(task => {
-        if (!task?.task_id) {
+      .then(resp => {
+        if (resp?.sync) {
+          setRunning(null)
+          if (!resp.ok) {
+            setToast({ type: 'error', text: resp.error || '操作失败' })
+            return
+          }
+          onChanged()
+          const data = resp.data
+          const actionUrl = data?.url || data?.checkout_url || data?.cashier_url
+          if (actionUrl) {
+            window.open(actionUrl, '_blank')
+            navigator.clipboard.writeText(actionUrl).catch(() => {})
+            setToast({ type: 'success', text: data?.message || '链接已在新标签打开' })
+            return
+          }
+          const msg = (data && typeof data === 'object') ? (data.message || '操作成功') : (typeof data === 'string' && data ? data : '操作成功')
+          setToast({ type: 'success', text: msg })
+          return
+        }
+        if (!resp?.task_id) {
           setRunning(null)
           setToast({ type: 'error', text: '任务创建失败' })
           return
         }
         setActionTask({
-          taskId: task.task_id,
+          taskId: resp.task_id,
           title: `${acc.email} · ${action.label}`,
         })
       })
@@ -1108,10 +1127,17 @@ function ActionMenu({
   return (
     <div className="relative flex min-w-[136px] items-center justify-end gap-1.5 whitespace-nowrap">
       {toast && (
-        <div className={`fixed top-4 right-4 z-50 px-4 py-2.5 rounded-lg shadow-lg text-sm font-medium animate-in fade-in slide-in-from-top-2 ${
-          toast.type === 'success' ? 'bg-emerald-500/90 text-white' : 'bg-red-500/90 text-white'
-        }`} onClick={() => setToast(null)}>
-          {toast.type === 'success' ? '✓ ' : '✗ '}{toast.text}
+        <div
+          className="fixed top-5 right-5 z-[9999] flex items-center gap-2.5 rounded-xl border px-4 py-3 text-[13px] font-medium shadow-lg backdrop-blur-xl cursor-pointer transition-all"
+          style={{
+            background: toast.type === 'success' ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
+            borderColor: toast.type === 'success' ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)',
+            color: toast.type === 'success' ? '#6ee7b7' : '#fca5a5',
+          }}
+          onClick={() => setToast(null)}
+        >
+          <span className="text-base">{toast.type === 'success' ? '✓' : '✗'}</span>
+          <span>{toast.text}</span>
         </div>
       )}
       {actionTask && (
@@ -1440,7 +1466,7 @@ function ExportMenu({
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  const doExport = async (format: 'json' | 'csv' | 'cpa' | 'sub2api') => {
+  const doExport = async (format: string) => {
     setLoading(format)
     try {
       const { blob, filename } = await apiDownload(`/accounts/export/${format}`, {
@@ -1465,9 +1491,11 @@ function ExportMenu({
   const options = [
     { key: 'json', label: '导出 JSON' },
     { key: 'csv', label: '导出 CSV' },
-    { key: 'cpa', label: '导出 CPA' },
+    { key: 'any2api', label: '导出 Any2Api' },
     { key: 'sub2api', label: '导出 Sub2Api' },
-  ] as const
+    { key: 'cpa', label: '导出 CPA' },
+    ...(platform === 'kiro' ? [{ key: 'kiro-go', label: '导出 Kiro-Go' }] : []),
+  ]
 
   return (
     <div className="relative" ref={menuRef}>

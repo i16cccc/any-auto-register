@@ -138,8 +138,8 @@ class WindsurfPlatform(BasePlatform):
 
     def get_platform_actions(self) -> list:
         return [
-            {"id": "get_account_state", "label": "查询账号状态/额度", "params": []},
-            {"id": "check_trial_eligibility", "label": "检查 Pro Trial 资格", "params": []},
+            {"id": "get_account_state", "label": "查询账号状态/额度", "params": [], "sync": True},
+            {"id": "check_trial_eligibility", "label": "检查 Pro Trial 资格", "params": [], "sync": True},
             {"id": "payment_link", "label": "生成 Pro Trial Stripe 链接（自动打码）", "params": [
                 {"key": "turnstile_token", "label": "Turnstile Token（可空，自动打码）", "type": "text"},
             ]},

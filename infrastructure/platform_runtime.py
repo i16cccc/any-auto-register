@@ -255,6 +255,7 @@ class PlatformRuntime:
                     id=str(item.get("id", "")),
                     label=str(item.get("label", "")),
                     params=params,
+                    sync=bool(item.get("sync", False)),
                 )
             )
         return actions
