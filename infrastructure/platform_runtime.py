@@ -46,7 +46,9 @@ PERSISTED_ACTION_DATA_KEYS = {
 STATEFUL_ACTION_IDS = {"get_account_state", "switch_account"}
 CASHIER_URL_ACTION_IDS = {
     "payment_link",
+    "payment_link_browser",
     "generate_trial_link",
+    "generate_trial_link_browser",
     "get_cashier_url",
     "generate_checkout_link",
 }

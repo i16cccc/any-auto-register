@@ -66,6 +66,21 @@ def _ensure_platform_capabilities_seeded(session: Session) -> dict[str, Platform
     changed = False
     for cls in _registry.values():
         if cls.name in by_name:
+            item = by_name[cls.name]
+            current = _normalize_platform_capabilities(item.get_capabilities(), cls)
+            defaults = _class_defaults(cls)
+            merged = {key: list(current.get(key, [])) for key in _CAPABILITY_KEYS}
+            did_merge = False
+            for key in _CAPABILITY_KEYS:
+                for value in defaults.get(key, []):
+                    if value not in merged[key]:
+                        merged[key].append(value)
+                        did_merge = True
+            if did_merge:
+                item.set_capabilities(merged)
+                item.updated_at = _utcnow()
+                session.add(item)
+                changed = True
             continue
         item = PlatformCapabilityOverrideModel(platform_name=cls.name)
         item.created_at = _utcnow()
