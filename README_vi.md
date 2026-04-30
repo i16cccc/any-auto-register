@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <b>Hệ thống tự động đăng ký và quản lý tài khoản đa nền tảng · 13+ nền tảng · 9+ dịch vụ email · Chế độ Protocol/Browser · Ứng dụng desktop một cú nhấp</b>
+  <b>Tự động đăng ký tài khoản ChatGPT, Cursor, Kiro, Grok, Windsurf, Trae & 13+ nền tảng AI · Chế độ Protocol/Browser · Ứng dụng desktop một cú nhấp cho Mac/Windows</b>
 </p>
 
 <a href="https://bestproxy.com/?keyword=l85nsbgw" target="_blank"><img src="assets/bestproxy.gif" alt="BestProxy - Residential IP độ tinh khiết cao, hỗ trợ chế độ một tài khoản một IP độc lập, chống liên kết toàn tuyến, tăng đáng kể tỷ lệ chấp nhận tài khoản và khả năng tồn tại lâu dài" width="100%"></a>

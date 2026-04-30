@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <b>Multi-platform account auto-registration & management system · 13+ platforms · 9+ mailbox services · Protocol/Browser dual-mode · One-click desktop app</b>
+  <b>Auto-register accounts for ChatGPT, Cursor, Kiro, Grok, Windsurf, Trae & 13+ AI platforms · Protocol/browser dual-mode · Plugin-based · One-click Mac/Windows desktop</b>
 </p>
 
 <a href="https://bestproxy.com/?keyword=l85nsbgw" target="_blank"><img src="assets/bestproxy.gif" alt="BestProxy - High-purity residential IPs with one-account-per-IP isolation, full-link anti-correlation, significantly boosting account approval rates and long-term survival" width="100%"></a>

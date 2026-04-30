@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <b>多平台账号自动注册与管理系统 · 13+ 平台 · 9+ 邮箱服务 · 协议/浏览器双模式 · 桌面版一键启动</b>
+  <b>ChatGPT / Cursor / Kiro / Grok / Windsurf / Trae 等 13+ AI 平台账号自动注册与管理 · 协议/浏览器双模式 · Mac/Windows 桌面版一键启动</b>
 </p>
 
 <a href="https://bestproxy.com/?keyword=l85nsbgw" target="_blank"><img src="assets/bestproxy.gif" alt="BestProxy - 高纯度住宅IP资源，支持一号一IP独享模式，全链路防关联，显著提升账号通过率与长期存活率" width="100%"></a>
