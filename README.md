@@ -1,10 +1,74 @@
 # Any Auto Register
 
+<p align="center">
+  <a href="https://github.com/lxf746/any-auto-register/stargazers"><img src="https://img.shields.io/github/stars/lxf746/any-auto-register?style=for-the-badge&logo=github&color=FFB003" alt="Stars" /></a>
+  <a href="https://github.com/lxf746/any-auto-register/network/members"><img src="https://img.shields.io/github/forks/lxf746/any-auto-register?style=for-the-badge&logo=github&color=blue" alt="Forks" /></a>
+  <a href="https://github.com/lxf746/any-auto-register/releases"><img src="https://img.shields.io/github/v/release/lxf746/any-auto-register?style=for-the-badge&logo=github&color=green" alt="Release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/lxf746/any-auto-register?style=for-the-badge&color=orange" alt="License" /></a>
+</p>
+
+<p align="center">
+  <b>中文</b> |
+  <a href="README_en.md">English</a> |
+  <a href="README_vi.md">Tiếng Việt</a>
+</p>
+
+<p align="center">
+  <b>多平台账号自动注册与管理系统 · 13+ 平台 · 9+ 邮箱服务 · 协议/浏览器双模式 · 桌面版一键启动</b>
+</p>
+
 <a href="https://bestproxy.com/?keyword=l85nsbgw" target="_blank"><img src="assets/bestproxy.gif" alt="BestProxy - 高纯度住宅IP资源，支持一号一IP独享模式，全链路防关联，显著提升账号通过率与长期存活率" width="100%"></a>
 
 > ⚠️ **免责声明**：本项目仅供学习和研究使用，不得用于任何商业用途。使用本项目所产生的一切后果由使用者自行承担。
 
+> 🌟 **本仓库为 [`lxf746/any-auto-register`](https://github.com/lxf746/any-auto-register) 官方上游（Official Upstream）**，最早的原作者仓库与最及时的更新均在此处。其他同名 fork 均为二次开发分支。
+
 多平台账号自动注册与管理系统，支持插件化扩展，内置 Web UI。
+
+<a href="https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register" target="_blank"><img src="assets/legionproxy.png" alt="LegionProxy—住宅代理专为账号注册与自动化打造，74M+ 真实住宅IP，195+ 国家，HTTP/3 高速连接，$0.60/GB 起" width="100%"></a>
+
+[LegionProxy—住宅代理专为账号注册与自动化打造 74M+ 真实住宅IP · 195+ 国家 · HTTP/3 高速连接 · $0.60/GB 起](https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register)
+
+## 目录
+
+- [项目亮点](#项目亮点)
+- [功能特性](#功能特性)
+- [界面预览](#界面预览)
+- [技术栈](#技术栈)
+- [快速开始](#快速开始)
+- [桌面版下载](#桌面版下载)
+- [Docker 部署](#docker-部署)
+- [邮箱服务配置](#邮箱服务配置)
+- [验证码服务配置](#验证码服务配置)
+- [代理池配置](#代理池配置)
+- [接码服务配置](#接码服务配置)
+- [账号生命周期管理](#账号生命周期管理)
+- [注册成功率仪表盘](#注册成功率仪表盘)
+- [Any2API 联动](#any2api-联动)
+- [项目结构](#项目结构)
+- [插件开发](#插件开发)
+- [常见问题](#常见问题)
+- [赞助商](#赞助商)
+- [用户讨论群](#用户讨论群)
+- [Star History](#star-history)
+- [License](#license)
+
+## 项目亮点
+
+为什么选择 any-auto-register（与同类项目对比）：
+
+| 能力 | any-auto-register（本项目） | 其他同类工具 |
+|------|------|------|
+| 🖥️ **桌面版一键启动** | ✅ Mac / Windows 双平台 Electron 客户端，免命令行 | ❌ 通常仅 CLI / Docker |
+| 🧩 **平台覆盖** | ✅ 13+ 平台开箱即用 + 通用 Anything 适配器 | 通常 1-3 个平台 |
+| 📨 **邮箱服务** | ✅ 9 种邮箱服务（自建 + 公共 + DDG） | 通常 1-2 种 |
+| ⚡ **三种执行模式** | ✅ 纯协议（无浏览器，最快） / 无头 / 有头 | 通常仅浏览器 |
+| 🔁 **账号生命周期** | ✅ 定时检测、Token 自动续期、Trial 预警 | ❌ 大多数仅注册 |
+| 📊 **成功率仪表盘** | ✅ 按平台/按代理/按天统计，错误聚合 | ❌ |
+| 🔌 **Any2API 联动** | ✅ 注册即可用，自动推送到网关 | ❌ |
+| 📦 **插件化架构** | ✅ 平台/邮箱/验证码/接码/代理 全部可插拔 | 通常硬编码 |
+
+> 💡 [`Any2API`](https://github.com/lxf746/any2api) 网关 + `any-auto-register` 注册器组合，可实现 **批量注册账号 → 自动推送 → 即刻当作 OpenAI/Claude 兼容 API 使用** 的全链路闭环。
 
 ## 功能特性
 
@@ -22,9 +86,21 @@
 - **Any2API 联动**：注册完成后自动推送账号到 Any2API 网关，注册即可用
 - **平台扩展操作**：各平台可自定义操作（如 Kiro 账号切换、Trae Pro 升级链接生成）
 
-<a href="https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register" target="_blank"><img src="assets/legionproxy.png" alt="LegionProxy—住宅代理专为账号注册与自动化打造，74M+ 真实住宅IP，195+ 国家，HTTP/3 高速连接，$0.60/GB 起" width="100%"></a>
+## 界面预览
 
-[LegionProxy—住宅代理专为账号注册与自动化打造 74M+ 真实住宅IP · 195+ 国家 · HTTP/3 高速连接 · $0.60/GB 起](https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register)
+> 📸 *截图将随版本迭代持续更新。完整功能演示请查看 [桌面版下载](#桌面版下载) 实际体验。*
+
+### 仪表盘
+![仪表盘](assets/screenshots/dashboard.png)
+
+### 注册任务
+![注册任务](assets/screenshots/register-task.png)
+
+### 全局配置
+![全局配置](assets/screenshots/settings.png)
+
+### 账号管理
+![账号管理](assets/screenshots/accounts.png)
 
 ## 技术栈
 
@@ -34,6 +110,19 @@
 | 前端 | React + TypeScript + Vite + TailwindCSS |
 | HTTP | curl_cffi（浏览器指纹伪装）|
 | 浏览器自动化 | Playwright / Camoufox |
+
+## 桌面版下载
+
+> 🚀 **零配置一键启动**：不想折腾 Python 和 Node.js？直接下载桌面客户端，双击即可使用。
+
+| 平台 | 下载 |
+|------|------|
+| 🍎 macOS（Intel / Apple Silicon） | [前往 Releases 下载 `.dmg`](https://github.com/lxf746/any-auto-register/releases/latest) |
+| 🪟 Windows | [前往 Releases 下载 `.exe`](https://github.com/lxf746/any-auto-register/releases/latest) |
+
+桌面客户端基于 Electron 打包，内置完整的 Python 后端 + React 前端，开箱即用。每次发布新版本（`v*` tag）会自动构建并发布到 [Releases](https://github.com/lxf746/any-auto-register/releases)。
+
+如需源码运行或自行打包，参考下方 [快速开始](#快速开始) 与 `electron/` 目录。
 
 ## 快速开始
 
@@ -129,7 +218,7 @@ npm run dev
 # 访问 http://localhost:5173
 ```
 
-### Docker 部署
+## Docker 部署
 
 一键启动：
 
@@ -556,6 +645,27 @@ docker compose up -d
 ## 更新日志
 
 详见 [GitHub Releases](https://github.com/lxf746/any-auto-register/releases)。
+
+## 赞助商
+
+感谢以下赞助商对 any-auto-register 的长期支持。如果你的服务也面向账号注册、自动化或 AI 开发者，欢迎联系作者加入。
+
+| Logo | 名称 | 介绍 | 链接 |
+| --- | --- | --- | --- |
+| <a href="https://bestproxy.com/?keyword=l85nsbgw" target="_blank"><img src="assets/bestproxy.gif" alt="BestProxy" width="140" /></a> | **BestProxy** | 高纯度住宅 IP，支持一号一 IP 独享模式，全链路防关联，显著提升账号通过率与长期存活率。 | [bestproxy.com](https://bestproxy.com/?keyword=l85nsbgw) |
+| <a href="https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register" target="_blank"><img src="assets/legionproxy.png" alt="LegionProxy" width="140" /></a> | **LegionProxy** | 住宅代理专为账号注册与自动化打造，74M+ 真实住宅 IP，195+ 国家，HTTP/3 高速连接，$0.60/GB 起。 | [legionproxy.io](https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register) |
+
+## 用户讨论群
+
+加入用户群获取最新动态、配置经验和注册技巧：
+
+<!-- TODO: 填写实际的群链接 / 二维码图片 -->
+
+- **Telegram 群**：*待补充*
+- **QQ 群**：*待补充*
+- **微信交流群**：*待补充（可放二维码图）*
+
+如需提交 Bug 或请求新功能，请前往 [Issues](https://github.com/lxf746/any-auto-register/issues)。
 
 ## Star History
 
