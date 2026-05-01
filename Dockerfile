@@ -37,7 +37,10 @@ RUN playwright install --with-deps chromium
 RUN python -m camoufox fetch
 
 # 复制后端代码
+ARG APP_VERSION=dev
 COPY . .
+# 注入版本号
+RUN echo "__version__ = \"${APP_VERSION}\"" > core/version.py
 # 不需要 .venv 和 frontend 源码
 RUN rm -rf .venv frontend
 

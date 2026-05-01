@@ -220,30 +220,65 @@ npm run dev
 
 ## Docker 部署
 
-一键启动：
+### 方式一：使用预构建镜像（推荐）
 
 ```bash
+# 创建目录
+mkdir -p any-auto-register && cd any-auto-register
+
+# 创建 docker-compose.yml
+cat > docker-compose.yml << 'EOF'
+services:
+  app:
+    image: ghcr.io/lxf746/any-auto-register:latest
+    ports:
+      - "8000:8000"   # Web UI
+      - "6080:6080"   # noVNC 可视化浏览器
+      - "8889:8889"   # Turnstile Solver
+    environment:
+      - DISPLAY=:99
+      # - APP_PASSWORD=changeme  # 可选：设置访问密码
+    volumes:
+      - ./data:/app/data   # 持久化数据库
+    restart: unless-stopped
+EOF
+
+# 启动
 docker compose up -d
 ```
 
-访问 `http://localhost:8000`。数据库自动持久化到 `./data/` 目录。
-
-如需使用有头浏览器模式（headed），可通过 noVNC 在浏览器中查看自动化过程：`http://localhost:6080`。
-
-自定义配置：
-
-```yaml
-# docker-compose.yml
-services:
-  app:
-    environment:
-      - VNC_PASSWORD=your_password  # 设置 VNC 密码（可选）
-```
-
-重新构建（代码更新后）：
+### 方式二：从源码构建
 
 ```bash
+git clone https://github.com/lxf746/any-auto-register.git
+cd any-auto-register/account_manager
 docker compose up -d --build
+```
+
+### 访问地址
+
+| 服务 | 地址 | 说明 |
+|------|------|------|
+| Web UI | `http://localhost:8000` | 主界面 |
+| noVNC | `http://localhost:6080` | 可视化浏览器（headed 模式） |
+| Solver | `http://localhost:8889` | Turnstile 验证码求解器 |
+
+> 云服务器部署时，请确保安全组/防火墙放行 8000、6080、8889 端口。
+
+### 常用命令
+
+```bash
+# 查看日志
+docker compose logs -f
+
+# 重启
+docker compose restart
+
+# 更新到最新版
+docker compose pull && docker compose up -d
+
+# 停止
+docker compose down
 ```
 
 ## 邮箱服务配置
