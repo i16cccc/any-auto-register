@@ -322,6 +322,23 @@ Tìm mã nhóm trong QQ để tham gia.
 
 [![Star History Chart](https://api.star-history.com/svg?repos=lxf746/any-auto-register&type=Date)](https://star-history.com/#lxf746/any-auto-register&Date)
 
+## Nhà tài trợ
+
+<table>
+<tr>
+<td width="220" align="center">
+<a href="https://www.rapidproxy.io/?ref=lxf" target="_blank">
+<img src="https://www.rapidproxy.io/static/rapidproxy/images/rapid_logo_700.png" alt="RapidProxy" width="180" />
+</a>
+</td>
+<td>
+<b><a href="https://www.rapidproxy.io/?ref=lxf">RapidProxy</a></b> — Proxy dân cư chất lượng cao, xoay IP thông minh, tỷ lệ bị chặn thấp, lưu lượng không hết hạn, hỗ trợ thu thập dữ liệu mạnh mẽ.<br/>
+90M+ IP dân cư thực · 200+ quốc gia / khu vực · 99.9% uptime · &lt;0.5s phản hồi.<br/>
+<a href="https://www.rapidproxy.io/?ref=lxf"><b>Dùng thử miễn phí →</b></a>
+</td>
+</tr>
+</table>
+
 ## Giấy phép
 
 Dự án này được cấp phép theo [AGPL-3.0](LICENSE). Học tập và nghiên cứu cá nhân được sử dụng tự do; sử dụng thương mại phải tuân thủ AGPL-3.0 (sản phẩm phái sinh phải open source).
